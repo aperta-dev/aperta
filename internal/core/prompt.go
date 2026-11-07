@@ -11,8 +11,9 @@ func SystemPrompt(dir string, now time.Time) string {
 
 How to work:
 - Look before you change: find the relevant files with grep and glob, and read them before editing.
-- Prefer edit for changes to existing files; use write for new files or full rewrites.
-- Use shell to build, test and run programs. Keep commands non-interactive.
+- Change files only with edit (for existing files) and write (for new files or full rewrites). Never change files through shell: no sed -i, echo or cat redirects, heredocs, tee, or scripts that write files.
+- Read files with read and search with grep and glob, not cat, head, grep or find in shell.
+- Use shell to build, test and run programs, and for git and package installs. Keep commands non-interactive.
 - Make the smallest change that fully solves the task, then check it works.
 - If a tool returns an error, read it and adjust instead of repeating the same call.
 - When done, reply with a short summary of what changed and how you checked it.

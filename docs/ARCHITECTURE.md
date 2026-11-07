@@ -67,9 +67,11 @@ internal/ui/headless/  `aperta run --json`
 
 ## Libraries
 
-v0.1 uses only the Go standard library. The Anthropic adapter is a small HTTP and server-sent events client written for Aperta, not the official SDK. That keeps the binary small and the retry and streaming rules in our own code.
+The Anthropic adapter is a small HTTP and server-sent events client written for Aperta, not the official SDK. That keeps the binary small and the retry and streaming rules in our own code.
 
-Before picking a TUI library, an MCP library or provider SDKs, check their current docs and versions; don't pick from memory. Every dependency goes into [DEPENDENCIES.md](DEPENDENCIES.md) with its license.
+The terminal UI uses Bubble Tea v2, Bubbles v2 and Lip Gloss v2 (Charm, MIT), checked against their November 2026 releases. Only `internal/ui/tui` imports them.
+
+Before picking an MCP library or provider SDKs, check their current docs and versions; don't pick from memory. Every dependency goes into [DEPENDENCIES.md](DEPENDENCIES.md) with its license.
 
 ## v0.1 notes
 

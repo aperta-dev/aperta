@@ -15,6 +15,8 @@ type Printer struct {
 	Out  io.Writer
 	Err  io.Writer
 
+	Session string
+
 	mu      sync.Mutex
 	enc     *json.Encoder
 	midLine bool
@@ -27,7 +29,10 @@ func (p *Printer) Handle(ev core.Event) {
 		if p.enc == nil {
 			p.enc = json.NewEncoder(p.Out)
 		}
-		p.enc.Encode(ev)
+		p.enc.Encode(struct {
+			core.Event
+			SessionID string `json:"session_id,omitempty"`
+		}{ev, p.Session})
 		return
 	}
 	switch ev.Type {

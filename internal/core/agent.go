@@ -21,16 +21,41 @@ type Agent struct {
 	MaxTurns    int
 	MaxTokens   int
 	Effort      string
+	Recorder    Recorder
 	Messages    []provider.Message
+}
+
+type Recorder interface {
+	AppendMessage(provider.Message) error
+	AppendUsage(provider.Usage) error
+}
+
+const interrupted = "interrupted by the user before this tool ran"
+
+func (a *Agent) add(m provider.Message) error {
+	a.Messages = append(a.Messages, m)
+	if a.Recorder == nil {
+		return nil
+	}
+	if err := a.Recorder.AppendMessage(m); err != nil {
+		return fmt.Errorf("saving session: %w", err)
+	}
+	return nil
 }
 
 var ErrMaxTurns = errors.New("reached the turn limit")
 
 func (a *Agent) Run(ctx context.Context, prompt string, emit func(Event)) error {
-	a.Messages = append(a.Messages, provider.Message{
+	fail := func(turn int, err error) error {
+		emit(Event{Type: EventError, Turn: turn, Error: err.Error()})
+		return err
+	}
+	if err := a.add(provider.Message{
 		Role:    provider.RoleUser,
 		Content: []provider.Block{{Type: provider.BlockText, Text: prompt}},
-	})
+	}); err != nil {
+		return fail(0, err)
+	}
 	var total provider.Usage
 	for turn := 1; a.MaxTurns <= 0 || turn <= a.MaxTurns; turn++ {
 		resp, err := a.Provider.Stream(ctx, provider.Request{
@@ -44,13 +69,19 @@ func (a *Agent) Run(ctx context.Context, prompt string, emit func(Event)) error 
 			emit(Event{Type: EventMessageDelta, Turn: turn, Kind: d.Kind, Text: d.Text})
 		})
 		if err != nil {
-			emit(Event{Type: EventError, Turn: turn, Error: err.Error()})
-			return err
+			return fail(turn, err)
 		}
 		total.Add(resp.Usage)
 		usage := resp.Usage
 		emit(Event{Type: EventUsage, Turn: turn, Usage: &usage})
-		a.Messages = append(a.Messages, resp.Message)
+		if a.Recorder != nil {
+			if err := a.Recorder.AppendUsage(usage); err != nil {
+				return fail(turn, fmt.Errorf("saving session: %w", err))
+			}
+		}
+		if err := a.add(resp.Message); err != nil {
+			return fail(turn, err)
+		}
 		calls := resp.Message.ToolCalls()
 		switch {
 		case resp.StopReason == provider.StopPauseTurn:
@@ -62,19 +93,38 @@ func (a *Agent) Run(ctx context.Context, prompt string, emit func(Event)) error 
 		}
 		results := make([]provider.Block, 0, len(calls))
 		for _, call := range calls {
+			if ctx.Err() != nil {
+				results = append(results, provider.Block{Type: provider.BlockToolResult, ToolUseID: call.ID, Content: interrupted, IsError: true})
+				continue
+			}
 			emit(Event{Type: EventToolCall, Turn: turn, ToolCall: &ToolCall{ID: call.ID, Name: call.Name, Input: call.Input}})
 			out, isErr := a.runTool(ctx, call, resp.StopReason)
 			if ctx.Err() != nil {
-				emit(Event{Type: EventError, Turn: turn, Error: ctx.Err().Error()})
-				return ctx.Err()
+				out, isErr = "interrupted by the user while this tool ran", true
 			}
 			emit(Event{Type: EventToolResult, Turn: turn, ToolResult: &ToolResult{ID: call.ID, Name: call.Name, Output: out, IsError: isErr}})
 			results = append(results, provider.Block{Type: provider.BlockToolResult, ToolUseID: call.ID, Content: out, IsError: isErr})
 		}
-		a.Messages = append(a.Messages, provider.Message{Role: provider.RoleUser, Content: results})
+		if err := a.add(provider.Message{Role: provider.RoleUser, Content: results}); err != nil {
+			return fail(turn, err)
+		}
+		if ctx.Err() != nil {
+			return fail(turn, ctx.Err())
+		}
 	}
-	emit(Event{Type: EventError, Turn: a.MaxTurns, Error: ErrMaxTurns.Error()})
-	return ErrMaxTurns
+	return fail(a.MaxTurns, ErrMaxTurns)
+}
+
+func InterruptedResults(m provider.Message) *provider.Message {
+	calls := m.ToolCalls()
+	if m.Role != provider.RoleAssistant || len(calls) == 0 {
+		return nil
+	}
+	out := provider.Message{Role: provider.RoleUser}
+	for _, c := range calls {
+		out.Content = append(out.Content, provider.Block{Type: provider.BlockToolResult, ToolUseID: c.ID, Content: interrupted, IsError: true})
+	}
+	return &out
 }
 
 func (a *Agent) runTool(ctx context.Context, call provider.Block, stop provider.StopReason) (string, bool) {

@@ -37,7 +37,10 @@ A CLA, not a DCO: relicensing and commercial use need a license grant to the lic
 
 ## Status
 
-v0.1 in progress: agent loop, Anthropic provider, the 6 core tools and headless mode are built and pass the end-to-end tests against a fake API. Not yet run against the real API.
+- v0.1: agent loop, Anthropic provider, the 6 core tools and headless mode.
+- v0.2: terminal UI, permissions (once, for this project, no) and sessions with resume.
+
+Both pass their tests against a fake API. Neither has run against the real API yet.
 
 ## Architecture
 

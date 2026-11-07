@@ -84,11 +84,11 @@ func overloaded(w http.ResponseWriter) {
 	io.WriteString(w, `{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`)
 }
 
-const start = `{"type":"message_start","message":{"id":"m","type":"message","role":"assistant","content":[],"usage":{"input_tokens":10,"output_tokens":1,"cache_read_input_tokens":4}}}`
+const msgStart = `{"type":"message_start","message":{"id":"m","type":"message","role":"assistant","content":[],"usage":{"input_tokens":10,"output_tokens":1,"cache_read_input_tokens":4}}}`
 
 func toolTurn(id, name, input string) func(w http.ResponseWriter) {
 	half := len(input) / 2
-	return sse(start,
+	return sse(msgStart,
 		`{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}`,
 		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"plan `+name+`"}}`,
 		`{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig-`+id+`"}}`,
@@ -105,7 +105,7 @@ func toolTurn(id, name, input string) func(w http.ResponseWriter) {
 }
 
 func textTurn(text string) func(w http.ResponseWriter) {
-	return sse(start,
+	return sse(msgStart,
 		`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
 		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":`+jsonString(text)+`}}`,
 		`{"type":"content_block_stop","index":0}`,
@@ -121,10 +121,15 @@ func jsonString(s string) string {
 
 func runAperta(t *testing.T, api *fakeAPI, dir string, args ...string) ([]map[string]any, string, int) {
 	t.Helper()
+	return runApertaHome(t, api, t.TempDir(), dir, args...)
+}
+
+func runApertaHome(t *testing.T, api *fakeAPI, home, dir string, args ...string) ([]map[string]any, string, int) {
+	t.Helper()
 	srv := httptest.NewServer(api)
 	defer srv.Close()
 	cmd := exec.Command(binary, append([]string{"run", "--json", "--cwd", dir}, args...)...)
-	cmd.Env = append(os.Environ(), "ANTHROPIC_API_KEY=test-key", "ANTHROPIC_BASE_URL="+srv.URL)
+	cmd.Env = append(os.Environ(), "ANTHROPIC_API_KEY=test-key", "ANTHROPIC_BASE_URL="+srv.URL, "APERTA_HOME="+home)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -284,5 +289,124 @@ func TestVersionFlag(t *testing.T) {
 		if got := strings.TrimSpace(string(out)); got != "aperta dev" {
 			t.Errorf("%s printed %q, want %q", arg, got, "aperta dev")
 		}
+	}
+}
+
+func requestMessages(t *testing.T, req map[string]any) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for _, m := range req["messages"].([]any) {
+		out = append(out, m.(map[string]any))
+	}
+	return out
+}
+
+func sessionID(t *testing.T, events []map[string]any) string {
+	t.Helper()
+	id, _ := events[len(events)-1]["session_id"].(string)
+	if id == "" {
+		t.Fatalf("no session_id on last event: %v", events[len(events)-1])
+	}
+	return id
+}
+
+func TestContinueSendsEarlierConversation(t *testing.T) {
+	dir, home := t.TempDir(), t.TempDir()
+	first := &fakeAPI{t: t, replies: []func(http.ResponseWriter){
+		toolTurn("t1", "glob", `{"pattern":"*"}`),
+		textTurn("First answer."),
+	}}
+	events, stderr, code := runApertaHome(t, first, home, dir, "first question")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	id := sessionID(t, events)
+	second := &fakeAPI{t: t, replies: []func(http.ResponseWriter){textTurn("Second answer.")}}
+	events, stderr, code = runApertaHome(t, second, home, dir, "--continue", "second question")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	if got := sessionID(t, events); got != id {
+		t.Errorf("continued session %s, want %s", got, id)
+	}
+	msgs := requestMessages(t, second.requests[0])
+	if len(msgs) != 5 {
+		t.Fatalf("want 5 messages (q, tool call, tool result, answer, q2), got %d: %v", len(msgs), msgs)
+	}
+	thinking := msgs[1]["content"].([]any)[0].(map[string]any)
+	if thinking["signature"] != "sig-t1" {
+		t.Errorf("thinking signature lost on resume: %v", thinking)
+	}
+	if text := msgs[4]["content"].([]any)[0].(map[string]any)["text"]; text != "second question" {
+		t.Errorf("last message = %v", text)
+	}
+	third := &fakeAPI{t: t, replies: []func(http.ResponseWriter){textTurn("Third.")}}
+	if _, stderr, code := runApertaHome(t, third, home, dir, "--resume", id[:15], "third"); code != 0 {
+		t.Fatalf("resume by prefix: exit %d: %s", code, stderr)
+	}
+	if n := len(requestMessages(t, third.requests[0])); n != 7 {
+		t.Errorf("resume by prefix sent %d messages, want 7", n)
+	}
+	cmd := exec.Command(binary, "sessions", "--cwd", dir)
+	cmd.Env = append(os.Environ(), "APERTA_HOME="+home)
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), id) || !strings.Contains(string(out), "first question") {
+		t.Errorf("sessions list = %q, %v", out, err)
+	}
+}
+
+func TestResumeRepairsInterruptedToolCall(t *testing.T) {
+	dir, home := t.TempDir(), t.TempDir()
+	real, _ := filepath.EvalSymlinks(dir)
+	os.MkdirAll(filepath.Join(home, "sessions"), 0o700)
+	lines := []string{
+		`{"type":"session","id":"20260101-000000-aaaaaa","time":"2026-01-01T00:00:00Z","cwd":"` + real + `","model":"claude-sonnet-5-5"}`,
+		`{"type":"message","id":"m-1","time":"2026-01-01T00:00:01Z","message":{"role":"user","content":[{"type":"text","text":"run it"}]}}`,
+		`{"type":"message","id":"m-2","parent":"m-1","time":"2026-01-01T00:00:02Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t9","name":"shell","input":{"command":"sleep 100"}}]}}`,
+		`{"type":"message","id":"m-3","parent":"m-2","ti`,
+	}
+	os.WriteFile(filepath.Join(home, "sessions", "20260101-000000-aaaaaa.jsonl"), []byte(strings.Join(lines, "\n")), 0o600)
+	api := &fakeAPI{t: t, replies: []func(http.ResponseWriter){textTurn("ok")}}
+	if _, stderr, code := runApertaHome(t, api, home, dir, "-c", "go on"); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	msgs := requestMessages(t, api.requests[0])
+	if len(msgs) != 4 {
+		t.Fatalf("want 4 messages, got %d: %v", len(msgs), msgs)
+	}
+	result := msgs[2]["content"].([]any)[0].(map[string]any)
+	if result["type"] != "tool_result" || result["tool_use_id"] != "t9" || result["is_error"] != true {
+		t.Errorf("interrupted call not closed: %v", result)
+	}
+	raw, _ := os.ReadFile(filepath.Join(home, "sessions", "20260101-000000-aaaaaa.jsonl"))
+	for i, l := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		if !json.Valid([]byte(l)) {
+			t.Errorf("line %d of the session file is not JSON: %q", i+1, l)
+		}
+	}
+}
+
+func TestProjectRulesOnlyApplyToTheirProject(t *testing.T) {
+	dir, other, home := t.TempDir(), t.TempDir(), t.TempDir()
+	real, _ := filepath.EvalSymlinks(dir)
+	rules, _ := json.Marshal(map[string]any{"projects": map[string][]string{real: {"write"}}})
+	os.WriteFile(filepath.Join(home, "permissions.json"), rules, 0o600)
+	reply := func() *fakeAPI {
+		return &fakeAPI{t: t, replies: []func(http.ResponseWriter){
+			toolTurn("t1", "write", `{"path":"a.txt","content":"x"}`),
+			toolTurn("t2", "shell", `{"command":"touch b.txt"}`),
+			textTurn("done"),
+		}}
+	}
+	runApertaHome(t, reply(), home, dir, "write")
+	if _, err := os.Stat(filepath.Join(dir, "a.txt")); err != nil {
+		t.Errorf("write allowed by project rule did not run: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "b.txt")); err == nil {
+		t.Errorf("shell ran without a rule")
+	}
+	runApertaHome(t, reply(), home, other, "write")
+	if _, err := os.Stat(filepath.Join(other, "a.txt")); err == nil {
+		t.Errorf("rule for one project allowed a write in another")
 	}
 }
