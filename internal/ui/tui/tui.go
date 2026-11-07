@@ -70,18 +70,7 @@ func (m *model) quit() (tea.Model, tea.Cmd) {
 }
 
 func New(opts Options) *tea.Program {
-	in := textarea.New()
-	in.Prompt = "> "
-	in.Placeholder = "Ask Aperta to change, explain or check something"
-	in.ShowLineNumbers = false
-	in.DynamicHeight = true
-	in.MinHeight = 1
-	in.MaxHeight = 8
-	in.CharLimit = 0
-	in.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("shift+enter", "alt+enter", "ctrl+j"))
-	in.SetVirtualCursor(true)
-	in.Focus()
-	m := &model{opts: opts, input: in, spin: spinner.New(spinner.WithSpinner(spinner.Dot)), width: 80}
+	m := newModel(opts)
 	popts := []tea.ProgramOption{}
 	if opts.Input != nil || opts.Output != nil {
 		popts = append(popts, tea.WithInput(opts.Input), tea.WithOutput(opts.Output), tea.WithoutSignals())
@@ -94,6 +83,21 @@ func New(opts Options) *tea.Program {
 		opts.Gate.Prompter = &prompter{send: m.prog.Send}
 	}
 	return m.prog
+}
+
+func newModel(opts Options) *model {
+	in := textarea.New()
+	in.Prompt = "> "
+	in.Placeholder = "Ask Aperta to change, explain or check something"
+	in.ShowLineNumbers = false
+	in.DynamicHeight = true
+	in.MinHeight = 1
+	in.MaxHeight = 8
+	in.CharLimit = 0
+	in.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("shift+enter", "alt+enter", "ctrl+j"))
+	in.SetVirtualCursor(true)
+	in.Focus()
+	return &model{opts: opts, input: in, spin: spinner.New(spinner.WithSpinner(spinner.Dot)), width: 80}
 }
 
 func Run(opts Options) error {
@@ -157,7 +161,7 @@ func (m *model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.ask != nil {
 		d, ok := core.Deny, true
 		switch k {
-		case "1", "y", "enter":
+		case "1", "y":
 			d = core.AllowOnce
 		case "2", "a":
 			if m.ask.rule == "" {
@@ -291,12 +295,15 @@ func (m *model) View() tea.View {
 	if m.live != "" {
 		b.WriteString(m.live + "\n")
 	}
-	if m.ask != nil {
+	switch {
+	case m.ask != nil:
 		b.WriteString(m.askView())
-	} else if m.running {
+	case m.running:
 		b.WriteString(accent.Render(m.spin.View()) + " " + m.status + dim.Render(" · esc to stop") + "\n")
 	}
-	b.WriteString(m.input.View() + "\n")
+	if m.ask == nil {
+		b.WriteString(m.input.View() + "\n")
+	}
 	b.WriteString(dim.Render(m.footer()))
 	return tea.NewView(b.String())
 }
@@ -313,6 +320,11 @@ func (m *model) askView() string {
 		b.WriteString("   " + bold.Render("2") + " yes, " + core.DescribeRule(a.rule) + " in this project")
 	}
 	b.WriteString("   " + bold.Render("3") + " no\n")
+	keys := "1 or 3"
+	if a.rule != "" {
+		keys = "1, 2 or 3"
+	}
+	b.WriteString(warn.Render("press "+keys) + dim.Render(" (esc = no)") + "\n")
 	return b.String()
 }
 

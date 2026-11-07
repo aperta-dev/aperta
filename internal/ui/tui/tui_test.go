@@ -180,3 +180,64 @@ func TestEscStopsRunningTurnAndDenyIsReported(t *testing.T) {
 		t.Errorf("last message after stop = %v", last.Role)
 	}
 }
+
+func TestPermissionPromptReplacesInputAndIgnoresEnter(t *testing.T) {
+	agent := &core.Agent{Model: "m", Dir: t.TempDir()}
+	m := newModel(Options{Agent: agent, Version: "test"})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	plain := func() string { return ansi.ReplaceAllString(m.View().Content, "") }
+	if !strings.Contains(plain(), "Ask Aperta") {
+		t.Fatalf("input placeholder missing before the prompt: %q", plain())
+	}
+	cases := []struct {
+		rule, hint string
+		keys       []string
+		want       core.Decision
+	}{
+		{"shell:go", "press 1, 2 or 3", []string{"enter", "x", "1"}, core.AllowOnce},
+		{"edit", "press 1, 2 or 3", []string{"enter", "2"}, core.AllowProject},
+		{"", "press 1 or 3", []string{"enter", "2", "esc"}, core.Deny},
+		{"", "press 1 or 3", []string{"enter", "3"}, core.Deny},
+	}
+	for _, c := range cases {
+		reply := make(chan core.Decision, 1)
+		input, _ := json.Marshal(map[string]string{"command": "go test ./..."})
+		m.Update(askMsg{req: core.PermissionRequest{Tool: "shell", Input: input}, rule: c.rule, reply: reply})
+		view := plain()
+		if strings.Contains(view, "Ask Aperta") || strings.Contains(view, "\n> ") || strings.HasPrefix(view, "> ") {
+			t.Errorf("input box still shown during the prompt:\n%s", view)
+		}
+		if !strings.Contains(view, c.hint) || !strings.Contains(view, "esc = no") {
+			t.Errorf("rule %q: hint missing:\n%s", c.rule, view)
+		}
+		for i, k := range c.keys {
+			var msg tea.KeyPressMsg
+			switch k {
+			case "enter":
+				msg = tea.KeyPressMsg{Code: tea.KeyEnter}
+			case "esc":
+				msg = tea.KeyPressMsg{Code: tea.KeyEscape}
+			default:
+				msg = tea.KeyPressMsg{Code: rune(k[0]), Text: k}
+			}
+			m.Update(msg)
+			last := i == len(c.keys)-1
+			select {
+			case d := <-reply:
+				if !last {
+					t.Fatalf("rule %q: key %q answered the prompt with %v", c.rule, k, d)
+				}
+				if d != c.want {
+					t.Errorf("rule %q: got %v, want %v", c.rule, d, c.want)
+				}
+			default:
+				if last {
+					t.Fatalf("rule %q: key %q did not answer", c.rule, k)
+				}
+			}
+		}
+		if m.ask != nil || !strings.Contains(plain(), "Ask Aperta") {
+			t.Errorf("rule %q: input not back after answering", c.rule)
+		}
+	}
+}

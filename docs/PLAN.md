@@ -1,5 +1,16 @@
 # Aperta plan
 
+## Principles
+
+Aperta must never feel overwhelming. That was Prism's biggest problem. Every UI change follows these rules:
+
+- **Calm by default**: one thing asks for attention at a time. No splash screens, mascots, sidebars or dashboards unless the user opens them.
+- **Progressive disclosure**: a tool call shows as one short line. Full output stays collapsed until the user asks for it.
+- **Every screen explains itself**: any prompt shows which keys to press. No hidden modes.
+- **Few commands**: a small /help with a short list. A feature is added only when it earns its place on screen.
+- **A quiet status line**: model, session and tokens in one dim line. No progress spam.
+- **Safe defaults**: nothing destructive happens on Enter or by accident.
+
 ## Name
 
 - Product: Aperta. Package and CLI: `aperta`.
