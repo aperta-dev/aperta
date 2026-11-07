@@ -3,10 +3,12 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	xansi "github.com/charmbracelet/x/ansi"
 
 	"gitlab.com/aperta/aperta/internal/core"
 	"gitlab.com/aperta/aperta/internal/provider"
@@ -40,8 +42,55 @@ func renderUserWidth(text string, width int) string {
 	return "\n" + strings.Join(out, "\n")
 }
 
-func renderToolCall(name string, input json.RawMessage) string {
-	return accent.Render("* "+displayName(name)) + " " + inputSummary(input)
+func renderToolCall(name string, input json.RawMessage, dir string) string {
+	return accent.Render("* "+displayName(name)) + " " + inputSummary(input, dir)
+}
+
+func relative(s, dir string) string {
+	dir = strings.TrimRight(dir, "/")
+	if dir == "" {
+		return s
+	}
+	var b strings.Builder
+	for {
+		i := strings.Index(s, dir)
+		if i < 0 {
+			b.WriteString(s)
+			return b.String()
+		}
+		before := i == 0 || strings.ContainsRune(" \t\"'=:(", rune(s[i-1]))
+		rest := s[i+len(dir):]
+		switch {
+		case before && strings.HasPrefix(rest, "/"):
+			b.WriteString(s[:i])
+			s = rest[1:]
+		case before && (rest == "" || strings.ContainsRune(" \t\"';&|)", rune(rest[0]))):
+			b.WriteString(s[:i] + ".")
+			s = rest
+		default:
+			b.WriteString(s[:i+len(dir)])
+			s = rest
+		}
+	}
+}
+
+func shortPath(path string, width int) string {
+	if home, err := os.UserHomeDir(); err == nil && home != "" && (path == home || strings.HasPrefix(path, home+"/")) {
+		path = "~" + strings.TrimPrefix(path, home)
+	}
+	if width > 0 && xansi.StringWidth(path) > width {
+		if width == 1 {
+			return "…"
+		}
+		cut := xansi.StringWidth(path) - (width - 1)
+		kept := xansi.TruncateLeft(path, cut, "")
+		for xansi.StringWidth(kept) > width-1 {
+			cut++
+			kept = xansi.TruncateLeft(path, cut, "")
+		}
+		path = "…" + kept
+	}
+	return path
 }
 
 func displayName(name string) string {
@@ -156,7 +205,11 @@ func diffPreview(input json.RawMessage) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func inputSummary(input json.RawMessage) string {
+func inputSummary(input json.RawMessage, dir string) string {
+	return relative(rawSummary(input), dir)
+}
+
+func rawSummary(input json.RawMessage) string {
 	var m map[string]any
 	if json.Unmarshal(input, &m) != nil {
 		return ""
@@ -197,7 +250,7 @@ func clip(s string, n int) string {
 
 const resumeExchanges = 3
 
-func renderHistory(msgs []provider.Message, width int) []string {
+func renderHistory(msgs []provider.Message, width int, dir string) []string {
 	start, prompts := 0, 0
 	for i := len(msgs) - 1; i >= 0; i-- {
 		if isPrompt(msgs[i]) {
@@ -222,7 +275,7 @@ func renderHistory(msgs []provider.Message, width int) []string {
 					out = append(out, t)
 				}
 			case b.Type == provider.BlockToolUse:
-				out = append(out, fit(renderToolCall(b.Name, b.Input), width))
+				out = append(out, fit(renderToolCall(b.Name, b.Input, dir), width))
 			case b.Type == provider.BlockToolResult && b.IsError:
 				out = append(out, fit(errText.Render("  x "+firstLine(b.Content)), width))
 			}

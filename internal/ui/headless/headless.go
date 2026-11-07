@@ -71,7 +71,11 @@ func (p *Printer) Handle(ev core.Event) {
 			fmt.Fprintln(p.Err, ev.Message)
 		}
 		if t := ev.Total; t != nil {
-			fmt.Fprintf(p.Err, "[done] %s · %d in, %d out, %d cached\n", ev.StopReason, t.InputTokens+t.CacheReadTokens+t.CacheWriteTokens, t.OutputTokens, t.CacheReadTokens)
+			line := fmt.Sprintf("done · %s tokens in, %s out", count(t.InputTokens+t.CacheReadTokens+t.CacheWriteTokens), count(t.OutputTokens))
+			if p.Session != "" {
+				line += " · session " + p.Session
+			}
+			fmt.Fprintln(p.Err, line)
 		}
 	}
 }
@@ -105,4 +109,11 @@ func firstLine(s string) string {
 		s += " ..."
 	}
 	return s
+}
+
+func count(n int) string {
+	if n >= 1000 {
+		return fmt.Sprintf("%.1fk", float64(n)/1000)
+	}
+	return fmt.Sprint(n)
 }

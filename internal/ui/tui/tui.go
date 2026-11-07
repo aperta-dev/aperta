@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
@@ -47,11 +48,25 @@ type ModelSwitcher interface {
 	Disconnect(name string) error
 }
 
-const help = `Enter sends. Shift+Enter, Alt+Enter or Ctrl+J adds a line.
-Esc stops the running turn. Ctrl+C stops the turn, clears the input, or quits.
-/connect adds an API key or local server. /model picks a model.
-/model <provider> lists that provider's models. /model <provider>/<model> or /model <model> switches directly.
-/exit quits. Resume later with: aperta -c`
+var help = [][2]string{
+	{"enter", "send"},
+	{"shift+enter", "new line (also alt+enter, ctrl+j)"},
+	{"esc", "stop the reply"},
+	{"ctrl+c", "stop, clear the input, or quit"},
+	{"/model", "switch model; /model <provider> lists its models"},
+	{"/connect", "add an API key or a local server"},
+	{"/exit", "quit; resume later with aperta -c"},
+}
+
+func helpText(width int) string {
+	const col = 14
+	var out []string
+	for _, h := range help {
+		key := h[0] + strings.Repeat(" ", max(col-len(h[0]), 1))
+		out = append(out, wrapHanging(dim.Render(h[1]), width, bold.Render(key), strings.Repeat(" ", col)))
+	}
+	return strings.Join(out, "\n")
+}
 
 type (
 	liveMsg   string
@@ -70,27 +85,28 @@ type (
 )
 
 type model struct {
-	opts     Options
-	prog     *tea.Program
-	input    textarea.Model
-	spin     spinner.Model
-	width    int
-	running  bool
-	cancel   context.CancelFunc
-	live     string
-	status   string
-	ask      *askMsg
-	pick     *picker
-	cols     atomic.Int32
-	loads    int
-	conn     *connector
-	pending  *pendingModel
-	last     provider.Usage
-	window   int
-	winKey   string
-	warned   bool
-	greeted  bool
-	quitting bool
+	opts       Options
+	prog       *tea.Program
+	input      textarea.Model
+	spin       spinner.Model
+	width      int
+	running    bool
+	cancel     context.CancelFunc
+	live       string
+	status     string
+	ask        *askMsg
+	pick       *picker
+	cols       atomic.Int32
+	loads      int
+	conn       *connector
+	pending    *pendingModel
+	last       provider.Usage
+	window     int
+	winKey     string
+	warned     bool
+	greeted    bool
+	thinkSince time.Time
+	quitting   bool
 }
 
 func (m *model) quit() (tea.Model, tea.Cmd) {
@@ -163,9 +179,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return next, cmd
 }
 
+func (m *model) header(width int) string {
+	title := "Aperta " + m.opts.Version
+	room := max(max(width-1, 20)-len(title)-len(" ·  · /help"), 1)
+	return bold.Render(title) + dim.Render(" · "+shortPath(m.opts.Agent.Dir, room)+" · /help")
+}
+
 func (m *model) greet(width int) tea.Cmd {
-	header := bold.Render("Aperta "+m.opts.Version) + dim.Render(" · "+m.opts.Agent.Dir+" · /help")
-	lines := append([]string{header}, renderHistory(m.opts.History, width)...)
+	lines := append([]string{m.header(width)}, renderHistory(m.opts.History, width, m.opts.Agent.Dir)...)
 	if len(m.opts.History) > 0 {
 		lines = append(lines, dim.Render("resumed session "+m.opts.Session.ID))
 	}
@@ -217,6 +238,9 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.live = string(msg)
 		return m, nil
 	case statusMsg:
+		if string(msg) == "thinking" && m.status != "thinking" {
+			m.thinkSince = time.Now()
+		}
 		m.status = string(msg)
 		return m, nil
 	case usageMsg:
@@ -319,7 +343,7 @@ func (m *model) submit() (tea.Model, tea.Cmd) {
 	case "/exit", "/quit":
 		return m.quit()
 	case "/help":
-		return m, tea.Println(dim.Render(help))
+		return m, tea.Println(helpText(m.width))
 	case "/model":
 		return m.openPicker("")
 	case "/connect":
@@ -355,7 +379,7 @@ func (m *model) submit() (tea.Model, tea.Cmd) {
 func (m *model) runTurn(ctx context.Context, prompt string) {
 	p := m.prog
 	p.Println(renderUserWidth(prompt, int(m.cols.Load())))
-	s := &stream{p: p, inputs: map[string]json.RawMessage{}, cols: &m.cols}
+	s := &stream{p: p, inputs: map[string]json.RawMessage{}, cols: &m.cols, dir: m.opts.Agent.Dir}
 	err := m.opts.Agent.Run(ctx, prompt, s.handle)
 	s.flush()
 	p.Send(doneMsg{err: err})
@@ -366,6 +390,7 @@ type stream struct {
 	live    string
 	inputs  map[string]json.RawMessage
 	cols    *atomic.Int32
+	dir     string
 	md      markdown
 	blank   bool
 	started bool
@@ -430,7 +455,7 @@ func (s *stream) handle(ev core.Event) {
 	case core.EventToolCall:
 		s.flush()
 		s.inputs[ev.ToolCall.ID] = ev.ToolCall.Input
-		s.show(renderToolCall(ev.ToolCall.Name, ev.ToolCall.Input))
+		s.show(renderToolCall(ev.ToolCall.Name, ev.ToolCall.Input, s.dir))
 		s.p.Send(statusMsg("running " + ev.ToolCall.Name))
 	case core.EventToolResult:
 		if out := renderToolResult(*ev.ToolResult, s.inputs[ev.ToolResult.ID]); out != "" {
@@ -486,7 +511,13 @@ func (m *model) View() tea.View {
 	case m.pick != nil:
 		section = m.pick.view(m.current())
 	case m.running:
-		section = accent.Render(m.spin.View()) + " " + m.status + dim.Render(" · esc to stop") + "\n"
+		status := m.status
+		if status == "thinking" {
+			if secs := int(time.Since(m.thinkSince).Seconds()); secs >= 1 {
+				status = fmt.Sprintf("thinking %ds", secs)
+			}
+		}
+		section = accent.Render(m.spin.View()) + " " + status + dim.Render(" · esc to stop") + "\n"
 	}
 	b.WriteString(wrapLines(section, width))
 	if m.ask == nil && m.pick == nil && m.conn == nil {
@@ -499,7 +530,7 @@ func (m *model) View() tea.View {
 func (m *model) askView() string {
 	a := m.ask
 	var b strings.Builder
-	b.WriteString("\n" + warn.Render("Allow "+displayName(a.req.Tool)+"?") + " " + inputSummary(a.req.Input) + "\n")
+	b.WriteString("\n" + warn.Render("Allow "+displayName(a.req.Tool)+"?") + " " + inputSummary(a.req.Input, m.opts.Agent.Dir) + "\n")
 	if a.req.Tool == "edit" {
 		b.WriteString(diffPreview(a.req.Input) + "\n")
 	}

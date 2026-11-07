@@ -366,7 +366,7 @@ func TestModelCommandSwitchesDirectly(t *testing.T) {
 	typeLine(p, "/model openai/gpt-6-sol")
 	waitFor(t, "failed switch", func() bool { return strings.Contains(out.text(), "model: OPENAI_API_KEY is not set") })
 	typeLine(p, "/help")
-	waitFor(t, "help", func() bool { return strings.Contains(out.text(), "/model picks a model") })
+	waitFor(t, "help", func() bool { return strings.Contains(out.text(), "switch model; /model <provider> lists its models") })
 	p.Quit()
 	p.Wait()
 	if agent.Provider.Name() != "openrouter" {

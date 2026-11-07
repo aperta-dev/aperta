@@ -3,11 +3,14 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	xansi "github.com/charmbracelet/x/ansi"
 
 	"gitlab.com/aperta/aperta/internal/core"
 	"gitlab.com/aperta/aperta/internal/provider"
@@ -117,7 +120,7 @@ func TestResumeShowsOnlyRecentExchanges(t *testing.T) {
 			provider.Message{Role: provider.RoleAssistant, Content: []provider.Block{{Type: provider.BlockText, Text: fmt.Sprintf("**answer %d**", i)}}},
 		)
 	}
-	got := plain(strings.Join(renderHistory(msgs, 80), "\n"))
+	got := plain(strings.Join(renderHistory(msgs, 80, ""), "\n"))
 	if !strings.HasPrefix(got, "6 messages earlier in this session not shown") {
 		t.Errorf("no earlier count:\n%s", got)
 	}
@@ -130,7 +133,7 @@ func TestResumeShowsOnlyRecentExchanges(t *testing.T) {
 	if !strings.Contains(got, "answer 6") || strings.Contains(got, "**") {
 		t.Errorf("answers not rendered:\n%s", got)
 	}
-	if got := renderHistory(msgs[:4], 80); strings.Contains(plain(strings.Join(got, "\n")), "not shown") {
+	if got := renderHistory(msgs[:4], 80, ""); strings.Contains(plain(strings.Join(got, "\n")), "not shown") {
 		t.Error("a short history said messages were hidden")
 	}
 }
@@ -236,7 +239,7 @@ func TestGreetingWaitsForTheRealWidthAndRunsOnce(t *testing.T) {
 	if _, again := m.Update(tea.WindowSizeMsg{Width: 90, Height: 20}); again != nil {
 		t.Error("greeted twice")
 	}
-	got := plain(strings.Join(renderHistory(history, 40), "\n"))
+	got := plain(strings.Join(renderHistory(history, 40, ""), "\n"))
 	maxWidth(t, got, 39)
 }
 
@@ -249,4 +252,79 @@ func TestContextWindowComesFromCacheOnly(t *testing.T) {
 	d.m.winKey = ""
 	d.send(usageMsg{InputTokens: 4200})
 	d.expect("cached list", "10% of context")
+}
+
+func TestBatchThreeDetails(t *testing.T) {
+	dir := "/work/project"
+	in, _ := json.Marshal(map[string]string{"command": "ls /work/project/src && cat /work/project/a.txt"})
+	if got := plain(renderToolCall("shell", in, dir)); got != "* shell ls src && cat a.txt" {
+		t.Errorf("tool call = %q", got)
+	}
+	in, _ = json.Marshal(map[string]string{"pattern": "*", "path": "/work/project"})
+	if got := plain(renderToolCall("glob", in, dir)); got != "* glob ." {
+		t.Errorf("tool call = %q", got)
+	}
+	home, _ := os.UserHomeDir()
+	if got := shortPath(home+"/Projects/prismv2", 0); got != "~/Projects/prismv2" {
+		t.Errorf("shortPath = %q", got)
+	}
+	if got := shortPath("/private/var/folders/hn/4bl3jjc16gn5n3vx5/T/tmp1p5cuqw5", 20); xansi.StringWidth(got) != 20 || !strings.HasPrefix(got, "…") || !strings.HasSuffix(got, "tmp1p5cuqw5") {
+		t.Errorf("shortPath trimmed = %q", got)
+	}
+	m := newModel(Options{Agent: &core.Agent{Provider: &named{name: "anthropic"}, Model: "m", Dir: "/private/var/folders/hn/4bl3jjc16gn5n3vx5cq9n9lr0000gn/T/tmp1p5cuqw5"}, Version: "dev"})
+	for _, w := range []int{30, 60, 200} {
+		h := m.header(w)
+		if got := lipgloss.Width(h); got > max(w-1, 20) {
+			t.Errorf("header is %d columns at %d", got, w)
+		}
+		if !strings.HasSuffix(plain(h), " · /help") || (w >= 60 && !strings.Contains(plain(h), "tmp1p5cuqw5 · /help")) {
+			t.Errorf("header at %d: %q", w, plain(h))
+		}
+	}
+	for _, c := range []struct {
+		cmd, want string
+	}{
+		{"cd /work/project && ls", "cd . && ls"},
+		{"ls '/work/project'", "ls '.'"},
+		{"cat /work/project-old/a.txt", "cat /work/project-old/a.txt"},
+		{"cat /tmp/work/project/a", "cat /tmp/work/project/a"},
+		{"diff /work/project/a /work/project/b", "diff a b"},
+	} {
+		if got := relative(c.cmd, dir); got != c.want {
+			t.Errorf("relative(%q) = %q, want %q", c.cmd, got, c.want)
+		}
+	}
+	cjk := "/" + strings.Repeat("漢", 20)
+	for _, w := range []int{1, 2, 7, 20} {
+		got := shortPath(cjk, w)
+		if xansi.StringWidth(got) > w || !strings.HasPrefix(got, "…") {
+			t.Errorf("shortPath(cjk, %d) = %q (%d columns)", w, got, xansi.StringWidth(got))
+		}
+	}
+	if got := shortPath("/a/cafe\u0301s", 4); xansi.StringWidth(got) > 4 || !strings.HasSuffix(got, "e\u0301s") {
+		t.Errorf("shortPath split a combining mark: %q", got)
+	}
+	d := newDriver(t, &core.Agent{Provider: &named{name: "anthropic"}, Model: "m"}, &fakeModels{})
+	d.m.running = true
+	d.send(statusMsg("thinking"))
+	d.m.thinkSince = d.m.thinkSince.Add(-4 * time.Second)
+	d.expect("thinking timer", "thinking 4s")
+	d.send(statusMsg("thinking"))
+	d.expect("timer not reset by more thinking", "thinking 4s")
+	h := helpText(60)
+	maxWidth(t, h, 59)
+	if wide := helpText(100); len(strings.Split(wide, "\n")) != len(help) || !strings.Contains(plain(wide), "/model        switch model; /model <provider> lists its models") {
+		t.Errorf("help at 100 columns:\n%s", plain(wide))
+	}
+	for _, l := range strings.Split(plain(h), "\n") {
+		if strings.TrimSpace(l) == "" {
+			t.Errorf("blank line in help:\n%s", plain(h))
+		}
+	}
+	narrow := strings.Split(plain(helpText(40)), "\n")
+	for _, l := range narrow {
+		if strings.HasPrefix(l, " ") && !strings.HasPrefix(l, strings.Repeat(" ", 14)) {
+			t.Errorf("help continuation not aligned: %q", l)
+		}
+	}
 }
