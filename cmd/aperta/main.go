@@ -16,16 +16,15 @@ import (
 
 	"gitlab.com/aperta/aperta/internal/core"
 	"gitlab.com/aperta/aperta/internal/provider"
-	"gitlab.com/aperta/aperta/internal/provider/anthropic"
+	"gitlab.com/aperta/aperta/internal/provider/catalog"
 	"gitlab.com/aperta/aperta/internal/session"
 	"gitlab.com/aperta/aperta/internal/tool"
+	"gitlab.com/aperta/aperta/internal/tool/mcp"
 	"gitlab.com/aperta/aperta/internal/ui/headless"
 	"gitlab.com/aperta/aperta/internal/ui/tui"
 )
 
 var version = "dev"
-
-const defaultModel = "claude-sonnet-5-5"
 
 const usage = `Aperta, a coding agent.
 
@@ -33,12 +32,14 @@ Usage:
   aperta [flags]                open the terminal UI
   aperta run [flags] [prompt]   run one task headless; reads the prompt from stdin if not given
   aperta sessions               list sessions for this directory
+  aperta mcp                    list, add or remove MCP servers
   aperta version                print the version
 
 Flags for aperta and aperta run:
   -c, --continue        continue the latest session in this directory
   -r, --resume ID       resume a session (an id prefix is enough)
-  --model, --effort, --allow, --cwd, --max-turns, --max-tokens
+  --provider NAME       anthropic (default), openai, openrouter, ollama, lmstudio, openai-compatible
+  --model, --base-url, --effort, --allow, --cwd, --max-turns, --max-tokens
 Run "aperta -h" or "aperta run -h" for details.
 `
 
@@ -53,6 +54,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return start(args[1:], true, stdin, stdout, stderr)
 		case "sessions":
 			return listSessions(args[1:], stdout, stderr)
+		case "mcp":
+			return mcpCommand(args[1:], stdout, stderr)
 		case "version", "--version", "-v":
 			fmt.Fprintln(stdout, "aperta", version)
 			return 0
@@ -80,6 +83,10 @@ type options struct {
 	cont      bool
 	modelSet  bool
 	prompt    string
+	prov      provider.Provider
+	provider  string
+	provSet   bool
+	baseURL   string
 }
 
 func parse(name string, args []string, headlessMode bool, stderr io.Writer) (*options, int) {
@@ -92,7 +99,9 @@ func parse(name string, args []string, headlessMode bool, stderr io.Writer) (*op
 	} else {
 		fs.IntVar(&o.maxTurns, "max-turns", 200, "stop a task after this many model turns")
 	}
-	fs.StringVar(&o.model, "model", envOr("APERTA_MODEL", defaultModel), "model id (env APERTA_MODEL)")
+	fs.StringVar(&o.model, "model", os.Getenv("APERTA_MODEL"), "model id (env APERTA_MODEL; default: the provider's default)")
+	fs.StringVar(&o.provider, "provider", os.Getenv("APERTA_PROVIDER"), "model provider: "+strings.Join(catalog.Names(), ", ")+" (env APERTA_PROVIDER)")
+	fs.StringVar(&o.baseURL, "base-url", "", "API base URL, e.g. http://localhost:11434/v1 (env APERTA_BASE_URL for openai-compatible)")
 	allowHelp := "read: ask before write, edit and shell (headless: deny them); all: allow every tool"
 	fs.StringVar(&o.allow, "allow", "read", allowHelp)
 	fs.StringVar(&o.dir, "cwd", "", "working directory (default: current directory)")
@@ -108,11 +117,8 @@ func parse(name string, args []string, headlessMode bool, stderr io.Writer) (*op
 		}
 		return nil, 2
 	}
-	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "model" {
-			o.modelSet = true
-		}
-	})
+	o.modelSet = o.model != ""
+	o.provSet = o.provider != ""
 	if o.allow != "read" && o.allow != "all" {
 		fmt.Fprintf(stderr, "--allow must be read or all, got %q\n", o.allow)
 		return nil, 2
@@ -149,11 +155,6 @@ func start(args []string, headlessMode bool, stdin io.Reader, stdout, stderr io.
 		fmt.Fprintln(stderr, "the terminal UI needs a terminal; use aperta run for scripts")
 		return 2
 	}
-	key := os.Getenv("ANTHROPIC_API_KEY")
-	if key == "" {
-		fmt.Fprintln(stderr, "ANTHROPIC_API_KEY is not set")
-		return 1
-	}
 	workDir, err := resolveDir(o.dir)
 	if err != nil {
 		fmt.Fprintln(stderr, "error:", err)
@@ -169,17 +170,19 @@ func start(args []string, headlessMode bool, stdin io.Reader, stdout, stderr io.
 	if err != nil {
 		fmt.Fprintln(stderr, "warning: ignoring saved permissions:", err)
 	}
+	mcpCfg, err := mcp.LoadConfig(mcpPath())
+	if err != nil {
+		fmt.Fprintln(stderr, "warning: ignoring MCP servers:", err)
+	}
+	servers := mcp.Start(mcpCfg, mcp.Options{Dir: workDir, LogDir: filepath.Join(session.Home(), "logs"), Version: version})
+	defer servers.Close()
 	gate := &core.Gate{AllowAll: o.allow == "all", Rules: rules}
 	agent := &core.Agent{
-		Provider: anthropic.New(anthropic.Options{
-			APIKey:     key,
-			BaseURL:    os.Getenv("ANTHROPIC_BASE_URL"),
-			UserAgent:  "aperta/" + version,
-			MaxRetries: 4,
-		}),
+		Provider:    o.prov,
 		Model:       o.model,
 		System:      core.SystemPrompt(workDir, time.Now()),
 		Tools:       tool.Defaults(),
+		Toolsets:    []tool.Set{servers},
 		Permissions: gate,
 		Dir:         workDir,
 		MaxTurns:    o.maxTurns,
@@ -189,7 +192,7 @@ func start(args []string, headlessMode bool, stdin io.Reader, stdout, stderr io.
 		Messages:    history,
 	}
 	if !headlessMode {
-		if err := tui.Run(tui.Options{Agent: agent, Gate: gate, Session: sess, History: history, Version: version}); err != nil {
+		if err := tui.Run(tui.Options{Agent: agent, Gate: gate, Session: sess, History: history, Version: version, Servers: servers}); err != nil {
 			fmt.Fprintln(stderr, "error:", err)
 			return 1
 		}
@@ -198,6 +201,12 @@ func start(args []string, headlessMode bool, stdin io.Reader, stdout, stderr io.
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	servers.Wait(ctx)
+	for _, st := range servers.Status() {
+		if st.Err != nil {
+			fmt.Fprintf(stderr, "warning: MCP server %s failed: %v\n", st.Name, st.Err)
+		}
+	}
 	printer := &headless.Printer{JSON: o.jsonOut, Out: stdout, Err: stderr, Session: sess.ID}
 	if err := agent.Run(ctx, o.prompt, printer.Handle); err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -219,7 +228,10 @@ func openSession(o *options, workDir string) (*session.Session, []provider.Messa
 		id = latest
 	}
 	if id == "" {
-		s, err := session.Create(dir, workDir, o.model, version)
+		if err := chooseProvider(o, "", ""); err != nil {
+			return nil, nil, err
+		}
+		s, err := session.Create(dir, workDir, o.provider, o.model, version)
 		return s, nil, err
 	}
 	id, err := session.Resolve(dir, id)
@@ -230,8 +242,13 @@ func openSession(o *options, workDir string) (*session.Session, []provider.Messa
 	if err != nil {
 		return nil, nil, err
 	}
-	if !o.modelSet && s.Model != "" {
-		o.model = s.Model
+	if err := chooseProvider(o, s.Provider, s.Model); err != nil {
+		s.Close()
+		return nil, nil, err
+	}
+	if err := s.SetModel(o.provider, o.model); err != nil {
+		s.Close()
+		return nil, nil, err
 	}
 	if len(msgs) > 0 {
 		if fix := core.InterruptedResults(msgs[len(msgs)-1]); fix != nil {
@@ -243,6 +260,34 @@ func openSession(o *options, workDir string) (*session.Session, []provider.Messa
 		}
 	}
 	return s, msgs, nil
+}
+
+func chooseProvider(o *options, sessProvider, sessModel string) error {
+	if sessProvider == "" && sessModel != "" {
+		sessProvider = catalog.Default
+	}
+	if !o.provSet {
+		o.provider = sessProvider
+		if o.provider == "" {
+			o.provider = catalog.Default
+		}
+	}
+	spec, err := catalog.Lookup(o.provider)
+	if err != nil {
+		return err
+	}
+	if !o.modelSet {
+		if o.provider == sessProvider && sessModel != "" {
+			o.model = sessModel
+		} else {
+			o.model = spec.DefaultModel
+		}
+	}
+	if o.model == "" {
+		return errors.New(spec.ModelHint())
+	}
+	o.prov, err = spec.New(catalog.Options{BaseURL: o.baseURL, UserAgent: "aperta/" + version, MaxRetries: 4})
+	return err
 }
 
 func listSessions(args []string, stdout, stderr io.Writer) int {
@@ -330,11 +375,4 @@ func resolveDir(dir string) (string, error) {
 		abs = real
 	}
 	return abs, nil
-}
-
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
 }

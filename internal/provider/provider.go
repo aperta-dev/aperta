@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"strings"
 )
 
 type Role string
@@ -34,6 +35,8 @@ type Block struct {
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 	Content   string          `json:"content,omitempty"`
 	IsError   bool            `json:"is_error,omitempty"`
+	Origin    string          `json:"origin,omitempty"`
+	Raw       json.RawMessage `json:"raw,omitempty"`
 }
 
 type Message struct {
@@ -108,6 +111,18 @@ type Response struct {
 	Message    Message
 	StopReason StopReason
 	Usage      Usage
+}
+
+func ToolInput(raw string) json.RawMessage {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return json.RawMessage("{}")
+	}
+	var obj map[string]any
+	if json.Unmarshal([]byte(raw), &obj) != nil || obj == nil {
+		return json.RawMessage("{}")
+	}
+	return json.RawMessage(raw)
 }
 
 type Provider interface {

@@ -3,12 +3,14 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"charm.land/lipgloss/v2"
 
 	"gitlab.com/aperta/aperta/internal/core"
 	"gitlab.com/aperta/aperta/internal/provider"
+	"gitlab.com/aperta/aperta/internal/tool/mcp"
 )
 
 var (
@@ -36,7 +38,36 @@ func renderUser(text string) string {
 }
 
 func renderToolCall(name string, input json.RawMessage) string {
-	return accent.Render("* "+name) + " " + inputSummary(input)
+	return accent.Render("* "+displayName(name)) + " " + inputSummary(input)
+}
+
+func displayName(name string) string {
+	if server, tool, ok := mcp.SplitName(name); ok {
+		return server + " " + tool
+	}
+	return name
+}
+
+func serverStatus(list []mcp.Status) string {
+	var ok, failed []string
+	for _, s := range list {
+		if s.Err != nil {
+			failed = append(failed, s.Name)
+		} else {
+			ok = append(ok, fmt.Sprintf("%s (%s)", s.Name, plural(len(s.Tools), "tool", "tools")))
+		}
+	}
+	line := ""
+	if len(ok) > 0 {
+		line = dim.Render("mcp: " + strings.Join(ok, ", "))
+	}
+	if len(failed) > 0 {
+		if line != "" {
+			line += dim.Render(" · ")
+		}
+		line += errText.Render("failed: "+strings.Join(failed, ", ")) + dim.Render(" (aperta mcp list)")
+	}
+	return line
 }
 
 func renderToolResult(r core.ToolResult, input json.RawMessage) string {
@@ -125,6 +156,16 @@ func inputSummary(input json.RawMessage) string {
 		return ""
 	}
 	for _, k := range []string{"command", "path", "pattern"} {
+		if v, ok := m[k].(string); ok && v != "" {
+			return firstLine(v)
+		}
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
 		if v, ok := m[k].(string); ok && v != "" {
 			return firstLine(v)
 		}

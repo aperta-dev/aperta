@@ -19,6 +19,10 @@ type Tool interface {
 	Run(ctx context.Context, env Env, input json.RawMessage) (string, error)
 }
 
+type Set interface {
+	Tools() []Tool
+}
+
 func Defaults() []Tool {
 	return []Tool{Read{}, Write{}, Edit{}, Shell{}, Grep{}, Glob{}}
 }

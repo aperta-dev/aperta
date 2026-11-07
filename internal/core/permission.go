@@ -94,6 +94,11 @@ func DescribeRule(rule string) string {
 	if prog, ok := strings.CutPrefix(rule, "shell:"); ok {
 		return "every `" + prog + "` command"
 	}
+	if rest, ok := strings.CutPrefix(rule, "mcp__"); ok {
+		if server, tool, ok := strings.Cut(rest, "__"); ok {
+			return "every " + server + " " + tool + " call"
+		}
+	}
 	return "every " + rule
 }
 

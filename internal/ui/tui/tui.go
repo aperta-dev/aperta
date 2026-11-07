@@ -17,6 +17,7 @@ import (
 	"gitlab.com/aperta/aperta/internal/core"
 	"gitlab.com/aperta/aperta/internal/provider"
 	"gitlab.com/aperta/aperta/internal/session"
+	"gitlab.com/aperta/aperta/internal/tool/mcp"
 )
 
 type Options struct {
@@ -28,6 +29,7 @@ type Options struct {
 	Input   io.Reader
 	Output  io.Writer
 	Size    [2]int
+	Servers *mcp.Manager
 }
 
 const help = `Enter sends. Shift+Enter, Alt+Enter or Ctrl+J adds a line.
@@ -113,6 +115,10 @@ func (m *model) Init() tea.Cmd {
 			lines = append(lines, dim.Render("resumed session "+m.opts.Session.ID))
 		}
 		m.prog.Println(strings.Join(lines, "\n"))
+		if m.opts.Servers != nil && !m.opts.Servers.Empty() {
+			m.opts.Servers.Wait(context.Background())
+			m.prog.Println(serverStatus(m.opts.Servers.Status()))
+		}
 	}()
 	return textarea.Blink
 }
@@ -311,7 +317,7 @@ func (m *model) View() tea.View {
 func (m *model) askView() string {
 	a := m.ask
 	var b strings.Builder
-	b.WriteString("\n" + warn.Render("Allow "+a.req.Tool+"?") + " " + inputSummary(a.req.Input) + "\n")
+	b.WriteString("\n" + warn.Render("Allow "+displayName(a.req.Tool)+"?") + " " + inputSummary(a.req.Input) + "\n")
 	if a.req.Tool == "edit" {
 		b.WriteString(diffPreview(a.req.Input) + "\n")
 	}

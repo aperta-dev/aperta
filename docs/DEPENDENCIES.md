@@ -4,12 +4,13 @@ Every dependency and its license. Allowed: MIT, Apache-2.0, BSD, ISC. Avoid GPL 
 
 | Package | Version | License | Why |
 | --- | --- | --- | --- |
-| Go standard library | 1.27 | BSD-3-Clause | Everything outside the terminal UI |
+| Go standard library | 1.27 | BSD-3-Clause | Everything else, including the provider HTTP clients |
 | charm.land/bubbletea/v2 | v2.1.1 | MIT | Terminal UI event loop and renderer |
 | charm.land/bubbles/v2 | v2.2.1 | MIT | Text input and spinner widgets |
 | charm.land/lipgloss/v2 | v2.0.6 | MIT | Terminal colours and styles |
+| github.com/modelcontextprotocol/go-sdk | v1.8.0 | Apache-2.0 (older parts MIT) | MCP client, stdio and streamable HTTP |
 
-Pulled in by the Charm libraries (indirect):
+Pulled in by those libraries (indirect, linked into the binary):
 
 | Package | Version | License |
 | --- | --- | --- |
@@ -22,10 +23,18 @@ Pulled in by the Charm libraries (indirect):
 | github.com/charmbracelet/x/windows | v0.2.2 | MIT |
 | github.com/clipperhouse/displaywidth | v0.11.0 | MIT |
 | github.com/clipperhouse/uax29/v2 | v2.7.0 | MIT |
+| github.com/google/jsonschema-go | v0.4.3 | MIT |
 | github.com/lucasb-eyer/go-colorful | v1.4.1 | MIT |
 | github.com/mattn/go-runewidth | v0.0.30 | MIT |
 | github.com/muesli/cancelreader | v0.2.2 | MIT |
 | github.com/rivo/uniseg | v0.4.7 | MIT |
+| github.com/segmentio/asm | v1.1.3 | MIT |
+| github.com/segmentio/encoding | v0.5.4 | MIT |
 | github.com/xo/terminfo | v1.0.0 | MIT |
+| github.com/yosida95/uritemplate/v3 | v3.0.2 | BSD-3-Clause |
+| golang.org/x/oauth2 | v0.35.0 | BSD-3-Clause |
 | golang.org/x/sync | v0.22.0 | BSD-3-Clause |
 | golang.org/x/sys | v0.47.0 | BSD-3-Clause |
+| golang.org/x/time | v0.15.0 | BSD-3-Clause |
+
+Checked with `go version -m` on the built binary. Test-only and unlinked modules in go.sum are not listed.

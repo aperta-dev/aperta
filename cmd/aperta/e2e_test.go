@@ -18,6 +18,10 @@ import (
 var binary string
 
 func TestMain(m *testing.M) {
+	if os.Getenv("APERTA_TEST_MCP_SERVER") == "1" {
+		serveTestMCP()
+		return
+	}
 	dir, err := os.MkdirTemp("", "aperta-e2e")
 	if err != nil {
 		panic(err)

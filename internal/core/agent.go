@@ -16,6 +16,7 @@ type Agent struct {
 	Model       string
 	System      string
 	Tools       []tool.Tool
+	Toolsets    []tool.Set
 	Permissions Permissions
 	Dir         string
 	MaxTurns    int
@@ -62,7 +63,7 @@ func (a *Agent) Run(ctx context.Context, prompt string, emit func(Event)) error 
 			Model:     a.Model,
 			System:    a.System,
 			Messages:  a.Messages,
-			Tools:     tool.Specs(a.Tools),
+			Tools:     tool.Specs(a.tools()),
 			MaxTokens: a.MaxTokens,
 			Effort:    a.Effort,
 		}, func(d provider.Delta) {
@@ -127,11 +128,22 @@ func InterruptedResults(m provider.Message) *provider.Message {
 	return &out
 }
 
+func (a *Agent) tools() []tool.Tool {
+	if len(a.Toolsets) == 0 {
+		return a.Tools
+	}
+	all := append([]tool.Tool(nil), a.Tools...)
+	for _, set := range a.Toolsets {
+		all = append(all, set.Tools()...)
+	}
+	return all
+}
+
 func (a *Agent) runTool(ctx context.Context, call provider.Block, stop provider.StopReason) (string, bool) {
 	if stop == provider.StopMaxTokens {
 		return "the response hit max_tokens before this tool call was complete; send a smaller call", true
 	}
-	t := tool.Find(a.Tools, call.Name)
+	t := tool.Find(a.tools(), call.Name)
 	if t == nil {
 		return fmt.Sprintf("unknown tool %q", call.Name), true
 	}

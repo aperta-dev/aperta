@@ -67,20 +67,37 @@ internal/ui/headless/  `aperta run --json`
 
 ## Libraries
 
-The Anthropic adapter is a small HTTP and server-sent events client written for Aperta, not the official SDK. That keeps the binary small and the retry and streaming rules in our own code.
+The provider adapters (Anthropic, OpenAI Responses, Chat Completions) are small HTTP and server-sent events clients written for Aperta, not the official SDKs. They share `internal/provider/transport` for retries, backoff, idle timeouts and SSE parsing. That keeps the binary small and the retry and streaming rules in our own code.
+
+MCP uses the official Go SDK, `github.com/modelcontextprotocol/go-sdk` v1.8.0 (Apache-2.0, with older parts MIT), which speaks protocol `2026-07-28`, the current version in November 2026. Only `internal/tool/mcp` imports it.
 
 The terminal UI uses Bubble Tea v2, Bubbles v2 and Lip Gloss v2 (Charm, MIT), checked against their November 2026 releases. Only `internal/ui/tui` imports them.
 
-Before picking an MCP library or provider SDKs, check their current docs and versions; don't pick from memory. Every dependency goes into [DEPENDENCIES.md](DEPENDENCIES.md) with its license.
+Before adding a library, check its current docs and versions; don't pick from memory. Every dependency goes into [DEPENDENCIES.md](DEPENDENCIES.md) with its license.
 
 ## v0.1 notes
 
 - Module path: `gitlab.com/aperta/aperta`. Go 1.27.
 - Anthropic: API version `2026-10-21`, streaming only, automatic prompt caching (top-level `cache_control`). Thinking blocks go back to the API unchanged, with their signatures. No `temperature`, `top_p` or `top_k` (removed in that API version). Default model `claude-sonnet-5-5`.
 - Retries: connection errors, 408, 409, 429 and 5xx (including 529), up to 4 times, honouring `retry-after` and `x-should-retry`. A stream is only retried if no text reached the user yet. A stream with no data for 5 minutes is dropped and retried.
-- Permissions: headless mode cannot ask, so `--allow read` (the default) allows only read, grep and glob, and `--allow all` allows every tool. The interactive ask, allow once and allow for this project come in v0.2.
-- Sessions: v0.1 keeps the conversation in memory. The JSONL session file comes in v0.2.
 - Tests: `cmd/aperta/e2e_test.go` builds the real binary and runs it against a fake Messages API that streams split events, a 529 retry, thinking and tool calls. `internal/tool/tool_test.go` covers glob matching, edit errors and shell limits.
+
+## v0.2 notes
+
+- **Terminal UI** (`internal/ui/tui`): inline, not full screen, so finished output goes into the terminal's own scrollback. Only the streaming line, the status, the permission prompt and the input box are redrawn. While a permission question is open the input box is hidden, a key hint shows, and Enter does nothing.
+- **Permissions** (`core.Gate`): read, grep and glob never ask. Every other tool asks: yes once, yes for this project, or no. A project rule is a tool name (`edit`, `mcp__github__search`) or, for shell, `shell:<program>`, offered only for a plain command with no shell operators, quotes, globs or variables. Rules live in `~/.aperta/permissions.json`, keyed by the project's real path, never in the repo. Headless mode uses the same rules and denies anything else unless `--allow all`.
+- **Sessions** (`internal/session`): one append-only JSONL file per session in `~/.aperta/sessions/<id>.jsonl`, mode 0600. Records: a `session` header (cwd, provider, model, version), then `message`, `usage` and `model` records. Each message has an `id` and a `parent`; resume follows the chain back from the last message, so branching and undo can add records later without rewriting the file. On resume, a half-written last line is cut off and a tool call left without a result gets an "interrupted" result.
+- **System prompt**: file changes go through edit and write only, never through shell.
+
+## v0.3 notes
+
+- **Providers** (`internal/provider/catalog`): `--provider` picks one of anthropic (default), openai, openrouter, ollama, lmstudio, openai-compatible. Each has its key variable (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `APERTA_API_KEY` for openai-compatible; optional for local servers) and a default base URL that `--base-url` overrides. Default models: `claude-sonnet-5-5` and `gpt-6-sol`; the others need `--model`.
+- **OpenAI Responses** (`internal/provider/openai/responses.go`): stateless (`store: false`), the whole conversation is sent each turn. Output items (reasoning with `encrypted_content`, messages with their `phase`, function calls) are kept raw in the block's `Raw` field and replayed unchanged, as the docs require. Function tools are sent with `strict: false` because our schemas have optional fields.
+- **Chat Completions** (`internal/provider/openai/chat.go`): for OpenRouter, Ollama, LM Studio and any compatible server. Streams split tool calls by index, reads `reasoning_content` or `reasoning` for the thinking status (never sent back), asks for usage with `stream_options.include_usage`, and accepts a stream that ends after `finish_reason` without `[DONE]`.
+- **One internal format**: each block records its `origin`. Reasoning only goes back to the API that produced it, so a session can switch provider: `aperta -c --provider openai` continues a Claude session, and the switch is saved as a `model` record so the next `-c` stays on it. Token use is normalised: `input_tokens` means uncached input for every provider.
+- **MCP client** (`internal/tool/mcp`): servers live in `~/.aperta/mcp.json` (`mcpServers`, the common format), managed with `aperta mcp add | list | remove`. Stdio servers start in the project directory with their stderr in `~/.aperta/logs/mcp-<name>.log`; HTTP servers use the streamable HTTP transport with optional headers. `$VARS` in env and header values expand at start, so tokens stay out of the file. Servers connect in the background (30 s limit each); a failing server is reported and skipped. Tools are named `mcp__<server>__<tool>` (64 characters at most), follow `tools/list_changed`, and always ask permission, since a server's read-only hint can't be trusted. Text results go to the model; images and binary resources are summarised, not sent.
+- **Not in v0.3**: OAuth for HTTP MCP servers (use a header token), project-level MCP config (needs a trust prompt, comes with config in v0.4), MCP prompts and resources, and the input-required tool results from the 2026-07-28 spec.
+- **Tests**: `cmd/aperta/providers_test.go` runs the real binary against a fake Responses API (retry on 429, verbatim replay of reasoning and phase, usage), a fake Chat Completions server (split tool calls, no `[DONE]`), a switch from OpenAI to Anthropic mid-session, and real MCP servers over stdio (the test binary itself) and streamable HTTP with a header token.
 
 ## Open questions
 

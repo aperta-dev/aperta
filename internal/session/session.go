@@ -21,24 +21,27 @@ const (
 	TypeSession = "session"
 	TypeMessage = "message"
 	TypeUsage   = "usage"
+	TypeModel   = "model"
 )
 
 type Record struct {
-	Type    string            `json:"type"`
-	ID      string            `json:"id"`
-	Parent  string            `json:"parent,omitempty"`
-	Time    time.Time         `json:"time"`
-	Cwd     string            `json:"cwd,omitempty"`
-	Model   string            `json:"model,omitempty"`
-	Version string            `json:"version,omitempty"`
-	Message *provider.Message `json:"message,omitempty"`
-	Usage   *provider.Usage   `json:"usage,omitempty"`
+	Type     string            `json:"type"`
+	ID       string            `json:"id"`
+	Parent   string            `json:"parent,omitempty"`
+	Time     time.Time         `json:"time"`
+	Cwd      string            `json:"cwd,omitempty"`
+	Provider string            `json:"provider,omitempty"`
+	Model    string            `json:"model,omitempty"`
+	Version  string            `json:"version,omitempty"`
+	Message  *provider.Message `json:"message,omitempty"`
+	Usage    *provider.Usage   `json:"usage,omitempty"`
 }
 
 type Info struct {
 	ID       string
 	Path     string
 	Cwd      string
+	Provider string
 	Model    string
 	Created  time.Time
 	Updated  time.Time
@@ -72,7 +75,7 @@ func newID(now time.Time) string {
 	return now.UTC().Format("20060102-150405") + "-" + hex.EncodeToString(b)
 }
 
-func Create(dir, cwd, model, version string) (*Session, error) {
+func Create(dir, cwd, providerName, model, version string) (*Session, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
@@ -83,8 +86,8 @@ func Create(dir, cwd, model, version string) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Session{Info: Info{ID: id, Path: path, Cwd: cwd, Model: model, Created: now, Updated: now}, f: f}
-	if err := s.write(Record{Type: TypeSession, ID: id, Time: now, Cwd: cwd, Model: model, Version: version}, false); err != nil {
+	s := &Session{Info: Info{ID: id, Path: path, Cwd: cwd, Provider: providerName, Model: model, Created: now, Updated: now}, f: f}
+	if err := s.write(Record{Type: TypeSession, ID: id, Time: now, Cwd: cwd, Provider: providerName, Model: model, Version: version}, false); err != nil {
 		f.Close()
 		return nil, err
 	}
@@ -198,7 +201,9 @@ func load(path string) (Info, []Record, error) {
 		}
 		switch r.Type {
 		case TypeSession:
-			info.Cwd, info.Model, info.Created = r.Cwd, r.Model, r.Time
+			info.Cwd, info.Provider, info.Model, info.Created = r.Cwd, r.Provider, r.Model, r.Time
+		case TypeModel:
+			info.Provider, info.Model = r.Provider, r.Model
 		case TypeMessage:
 			info.Messages++
 			if info.Title == "" && r.Message != nil && r.Message.Role == provider.RoleUser {
@@ -260,6 +265,19 @@ func Latest(dir, cwd string) (string, error) {
 
 func (s *Session) AppendMessage(m provider.Message) error {
 	return s.write(Record{Type: TypeMessage, Message: &m}, true)
+}
+
+func (s *Session) SetModel(providerName, model string) error {
+	if providerName == s.Provider && model == s.Model {
+		return nil
+	}
+	if err := s.write(Record{Type: TypeModel, Provider: providerName, Model: model}, false); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.Provider, s.Model = providerName, model
+	s.mu.Unlock()
+	return nil
 }
 
 func (s *Session) AppendUsage(u provider.Usage) error {

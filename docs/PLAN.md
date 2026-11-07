@@ -50,8 +50,9 @@ A CLA, not a DCO: relicensing and commercial use need a license grant to the lic
 
 - v0.1: agent loop, Anthropic provider, the 6 core tools and headless mode.
 - v0.2: terminal UI, permissions (once, for this project, no) and sessions with resume.
+- v0.3: OpenAI Responses, OpenAI-compatible providers (OpenRouter, Ollama, LM Studio, any server) and MCP over stdio and HTTP.
 
-Both pass their tests against a fake API. Neither has run against the real API yet.
+v0.1 and v0.2 were tested by hand against the real Anthropic API. v0.3 passes its tests against fake OpenAI, Chat Completions and MCP servers; it has not run against the real OpenAI API or a local model yet.
 
 ## Architecture
 
