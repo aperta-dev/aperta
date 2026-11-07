@@ -35,13 +35,18 @@ type Options struct {
 }
 
 type ModelSwitcher interface {
-	Choices(ctx context.Context) []catalog.Choice
+	Choices(ctx context.Context) ([]catalog.Choice, []string)
 	Switch(c catalog.Choice) (provider.Provider, error)
+	Statuses(ctx context.Context) []catalog.Status
+	Probe(ctx context.Context, name string) error
+	Connect(ctx context.Context, name, key, baseURL string) error
+	Disconnect(name string) error
 }
 
 const help = `Enter sends. Shift+Enter, Alt+Enter or Ctrl+J adds a line.
 Esc stops the running turn. Ctrl+C stops the turn, clears the input, or quits.
-/model picks a model. /model <provider>/<model> or /model <model> switches directly.
+/connect adds an API key or local server. /model picks a model.
+/model <provider>/<model> or /model <model> switches directly.
 /exit quits. Resume later with: aperta -c`
 
 type (
@@ -49,8 +54,11 @@ type (
 	statusMsg  string
 	usageMsg   provider.Usage
 	doneMsg    struct{ err error }
-	choicesMsg []catalog.Choice
-	askMsg     struct {
+	choicesMsg struct {
+		list    []catalog.Choice
+		missing []string
+	}
+	askMsg struct {
 		req   core.PermissionRequest
 		rule  string
 		reply chan core.Decision
@@ -69,6 +77,7 @@ type model struct {
 	status   string
 	ask      *askMsg
 	pick     *picker
+	conn     *connector
 	pending  *pendingModel
 	total    provider.Usage
 	quitting bool
@@ -125,12 +134,19 @@ func (m *model) Init() tea.Cmd {
 		if len(m.opts.History) > 0 {
 			lines = append(lines, dim.Render("resumed session "+m.opts.Session.ID))
 		}
+		if m.opts.Agent.Provider == nil {
+			lines = append(lines, warn.Render("No model provider is connected yet.")+dim.Render(" Pick one below to start."))
+		}
 		m.prog.Println(strings.Join(lines, "\n"))
 		if m.opts.Servers != nil && !m.opts.Servers.Empty() {
 			m.opts.Servers.Wait(context.Background())
 			m.prog.Println(serverStatus(m.opts.Servers.Status()))
 		}
 	}()
+	if m.opts.Agent.Provider == nil && m.opts.Models != nil {
+		_, cmd := m.openConnect()
+		return tea.Batch(textarea.Blink, cmd)
+	}
 	return textarea.Blink
 }
 
@@ -142,6 +158,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyPressMsg:
 		return m.key(msg)
+	case tea.PasteMsg:
+		if m.conn != nil {
+			return m.connectPaste(msg)
+		}
+		if m.ask != nil || m.pick != nil {
+			return m, nil
+		}
 	case liveMsg:
 		m.live = string(msg)
 		return m, nil
@@ -156,9 +179,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case choicesMsg:
 		if m.pick != nil {
-			m.pick.load(m.current(), msg)
+			m.pick.load(m.current(), msg.list, msg.missing)
 		}
 		return m, nil
+	case statusesMsg, connectResultMsg:
+		return m.connectMsg(msg)
 	case doneMsg:
 		m.running, m.cancel, m.live, m.status, m.ask = false, nil, "", "", nil
 		m.applyPending()
@@ -205,6 +230,9 @@ func (m *model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	if m.conn != nil {
+		return m.connectKey(msg)
+	}
 	if m.pick != nil {
 		return m.pickKey(k)
 	}
@@ -248,7 +276,9 @@ func (m *model) submit() (tea.Model, tea.Cmd) {
 	case "/help":
 		return m, tea.Println(dim.Render(help))
 	case "/model":
-		return m.openPicker()
+		return m.openPicker("")
+	case "/connect":
+		return m.openConnect()
 	}
 	if arg, ok := strings.CutPrefix(text, "/model "); ok {
 		c, err := catalog.ParseChoice(arg, m.opts.Agent.Provider.Name())
@@ -256,6 +286,11 @@ func (m *model) submit() (tea.Model, tea.Cmd) {
 			return m, tea.Println(errText.Render("model: " + err.Error()))
 		}
 		return m, m.switchTo(c)
+	}
+	if m.opts.Agent.Provider == nil {
+		m.input.SetValue(text)
+		_, cmd := m.openConnect()
+		return m, tea.Batch(tea.Println(warn.Render("Connect a provider first, then send again.")), cmd)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m.running, m.cancel, m.status = true, cancel, "working"
@@ -333,12 +368,14 @@ func (m *model) View() tea.View {
 	switch {
 	case m.ask != nil:
 		b.WriteString(m.askView())
+	case m.conn != nil:
+		b.WriteString(m.conn.view())
 	case m.pick != nil:
 		b.WriteString(m.pick.view(m.current()))
 	case m.running:
 		b.WriteString(accent.Render(m.spin.View()) + " " + m.status + dim.Render(" · esc to stop") + "\n")
 	}
-	if m.ask == nil && m.pick == nil {
+	if m.ask == nil && m.pick == nil && m.conn == nil {
 		b.WriteString(m.input.View() + "\n")
 	}
 	b.WriteString(dim.Render(m.footer()))
@@ -366,7 +403,10 @@ func (m *model) askView() string {
 }
 
 func (m *model) footer() string {
-	parts := []string{m.current().String()}
+	parts := []string{"no model · /connect"}
+	if c := m.current(); c.Provider != "" {
+		parts[0] = c.String()
+	}
 	if m.opts.Session != nil {
 		parts = append(parts, m.opts.Session.ID)
 	}

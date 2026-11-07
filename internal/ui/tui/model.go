@@ -15,7 +15,9 @@ const maxChoices = 8
 
 type picker struct {
 	loading bool
+	only    string
 	rows    []catalog.Choice
+	missing []string
 	sel     int
 }
 
@@ -43,22 +45,32 @@ func (m *model) applyPending() {
 	m.pending = nil
 }
 
-func (m *model) openPicker() (tea.Model, tea.Cmd) {
+func (m *model) openPicker(only string) (tea.Model, tea.Cmd) {
 	if m.opts.Models == nil {
 		return m, tea.Println(errText.Render("model: switching is not available here"))
 	}
-	m.pick = &picker{loading: true}
+	m.pick = &picker{loading: true, only: only}
 	models := m.opts.Models
 	return m, func() tea.Msg {
-		return choicesMsg(models.Choices(context.Background()))
+		list, missing := models.Choices(context.Background())
+		return choicesMsg{list: list, missing: missing}
 	}
 }
 
-func (p *picker) load(cur catalog.Choice, list []catalog.Choice) {
+func (p *picker) load(cur catalog.Choice, list []catalog.Choice, missing []string) {
 	p.loading = false
-	p.rows = []catalog.Choice{{Provider: cur.Provider, Model: cur.Model, Note: "current"}}
+	p.rows = nil
+	if cur.Provider != "" && (p.only == "" || p.only == cur.Provider) {
+		p.rows = append(p.rows, catalog.Choice{Provider: cur.Provider, Model: cur.Model, Note: "current"})
+	}
+	if p.only == "" {
+		p.missing = missing
+	}
 	for _, c := range list {
-		if c.Provider == cur.Provider && c.Model == cur.Model {
+		if p.only != "" && c.Provider != p.only {
+			continue
+		}
+		if c.Provider == cur.Provider && c.Model == cur.Model && len(p.rows) > 0 {
 			if c.Note != "" {
 				p.rows[0].Note = "current, " + c.Note
 			}
@@ -104,9 +116,14 @@ func (m *model) pickKey(k string) (tea.Model, tea.Cmd) {
 
 func (m *model) choose(i int) (tea.Model, tea.Cmd) {
 	row := m.pick.rows[i]
+	only := m.pick.only
 	m.pick = nil
 	if row.Provider == "" {
-		m.input.SetValue("/model ")
+		prefix := "/model "
+		if only != "" {
+			prefix += only + "/"
+		}
+		m.input.SetValue(prefix)
 		m.input.CursorEnd()
 		return m, nil
 	}
@@ -134,7 +151,15 @@ func (m *model) switchTo(c catalog.Choice) tea.Cmd {
 
 func (p *picker) view(cur catalog.Choice) string {
 	var b strings.Builder
-	b.WriteString("\n" + warn.Render("Switch model") + dim.Render(" · now "+cur.String()) + "\n")
+	title := "Switch model"
+	if p.only != "" {
+		title = "Pick a model from " + p.only
+	}
+	now := ""
+	if cur.Provider != "" {
+		now = " · now " + cur.String()
+	}
+	b.WriteString("\n" + warn.Render(title) + dim.Render(now) + "\n")
 	if p.loading {
 		b.WriteString(dim.Render("  checking which providers are set up...") + "\n")
 		b.WriteString(dim.Render("esc to cancel") + "\n")
@@ -154,6 +179,9 @@ func (p *picker) view(cur catalog.Choice) string {
 			line += dim.Render("  " + r.Note)
 		}
 		b.WriteString(line + "\n")
+	}
+	if len(p.missing) > 0 {
+		b.WriteString(dim.Render("  not connected: "+strings.Join(p.missing, ", ")+" · /connect to add") + "\n")
 	}
 	b.WriteString(warn.Render(fmt.Sprintf("press 1-%d or ↑↓ and enter", len(p.rows))) + dim.Render(" (esc = cancel)") + "\n")
 	return b.String()

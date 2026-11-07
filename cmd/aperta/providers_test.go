@@ -293,7 +293,7 @@ func TestChatCompletionsProvider(t *testing.T) {
 		t.Errorf("missing model: exit %d, %q", code, stderr)
 	}
 	_, stderr, code = runEnv(t, env, "run", "--cwd", dir, "--provider", "openai", "hi")
-	if code != 1 || !strings.Contains(stderr, "OPENAI_API_KEY is not set") {
+	if code != 1 || !strings.Contains(stderr, "openai is not connected: run aperta connect openai, or set OPENAI_API_KEY") {
 		t.Errorf("missing key: exit %d, %q", code, stderr)
 	}
 }

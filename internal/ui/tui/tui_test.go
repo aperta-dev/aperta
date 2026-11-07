@@ -247,11 +247,30 @@ func TestPermissionPromptReplacesInputAndIgnoresEnter(t *testing.T) {
 type fakeModels struct {
 	mu       sync.Mutex
 	choices  []catalog.Choice
+	missing  []string
 	switched []catalog.Choice
 	fail     error
+	conns    *catalog.Connections
 }
 
-func (f *fakeModels) Choices(ctx context.Context) []catalog.Choice { return f.choices }
+func (f *fakeModels) Choices(ctx context.Context) ([]catalog.Choice, []string) {
+	return f.choices, f.missing
+}
+
+func (f *fakeModels) Statuses(ctx context.Context) []catalog.Status {
+	if f.conns == nil {
+		return nil
+	}
+	return f.conns.Statuses(ctx)
+}
+
+func (f *fakeModels) Probe(ctx context.Context, name string) error { return f.conns.Probe(ctx, name) }
+
+func (f *fakeModels) Connect(ctx context.Context, name, key, baseURL string) error {
+	return f.conns.Connect(ctx, name, key, baseURL)
+}
+
+func (f *fakeModels) Disconnect(name string) error { return f.conns.Disconnect(name) }
 
 func (f *fakeModels) Switch(c catalog.Choice) (provider.Provider, error) {
 	f.mu.Lock()
@@ -332,12 +351,12 @@ func TestModelPickerKeysAndEsc(t *testing.T) {
 		{Provider: "anthropic", Model: "claude-sonnet-5-5", Note: "default"},
 		{Provider: "anthropic", Model: "claude-opus-5-5"},
 		{Provider: "ollama", Model: "qwen3-coder"},
-	}}
+	}, missing: []string{"openrouter", "lmstudio"}}
 	p, _, out := startModelUI(t, models)
 	m := func() string { return out.text() }
 	typeLine(p, "/model")
 	waitFor(t, "picker", func() bool { return strings.Contains(m(), "press 1-4 or ↑↓ and enter") })
-	for _, want := range []string{"1 anthropic/claude-sonnet-5-5  current, default", "2 anthropic/claude-opus-5-5", "3 ollama/qwen3-coder", "4 type a model id", "esc = cancel"} {
+	for _, want := range []string{"1 anthropic/claude-sonnet-5-5  current, default", "2 anthropic/claude-opus-5-5", "3 ollama/qwen3-coder", "4 type a model id", "not connected: openrouter, lmstudio · /connect to add", "esc = cancel"} {
 		if !strings.Contains(m(), want) {
 			t.Errorf("picker is missing %q:\n%s", want, m())
 		}

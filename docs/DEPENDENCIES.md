@@ -9,6 +9,7 @@ Every dependency and its license. Allowed: MIT, Apache-2.0, BSD, ISC. Avoid GPL 
 | charm.land/bubbles/v2 | v2.2.1 | MIT | Text input and spinner widgets |
 | charm.land/lipgloss/v2 | v2.0.6 | MIT | Terminal colours and styles |
 | github.com/modelcontextprotocol/go-sdk | v1.8.0 | Apache-2.0 (older parts MIT) | MCP client, stdio and streamable HTTP |
+| github.com/charmbracelet/x/term | v0.2.2 | MIT | Hidden key input for `aperta connect` |
 
 Pulled in by those libraries (indirect, linked into the binary):
 

@@ -13,8 +13,7 @@ CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o aperta ./cmd/aperta
 ## Use
 
 ```sh
-export ANTHROPIC_API_KEY=...
-aperta                       # terminal UI
+aperta                       # terminal UI; asks you to connect a provider the first time
 aperta -c                    # continue the latest session here
 aperta -r 20261107-0334      # resume a session by id prefix
 aperta sessions              # list sessions for this directory
@@ -22,11 +21,22 @@ aperta run "explain what this project does"
 echo "list the TODOs" | aperta run --json
 ```
 
+Connecting a provider:
+
+```sh
+aperta connect                         # which providers are connected
+aperta connect openrouter              # paste a key; it is checked before it is saved
+aperta connect openai-compatible --base-url http://host:8000/v1
+aperta connect --remove openrouter     # delete a saved key
+```
+
+In the terminal UI, `/connect` does the same: pick a provider, paste the key, and the model picker for it opens. Keys are saved in `~/.aperta/credentials.json`, readable only by you, and are shown masked (`sk-or-…9f2c`). An environment variable such as `OPENAI_API_KEY` still wins over a saved key.
+
 Other models:
 
 ```sh
-OPENAI_API_KEY=... aperta --provider openai                    # gpt-6-sol by default
-OPENROUTER_API_KEY=... aperta --provider openrouter --model anthropic/claude-sonnet-5-5
+aperta --provider openai                                       # gpt-6-sol by default
+aperta --provider openrouter --model anthropic/claude-sonnet-5-5
 aperta --provider ollama --model qwen3-coder                   # local, no key
 aperta --provider lmstudio --model <model id>
 aperta --provider openai-compatible --base-url http://host:8000/v1 --model <model id>

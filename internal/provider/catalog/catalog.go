@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"gitlab.com/aperta/aperta/internal/config"
 	"gitlab.com/aperta/aperta/internal/provider"
 	"gitlab.com/aperta/aperta/internal/provider/anthropic"
 	"gitlab.com/aperta/aperta/internal/provider/openai"
@@ -34,16 +36,22 @@ type Spec struct {
 	Models       []string
 	Example      string
 	Local        bool
+	KeyURL       string
+	StartHint    string
+}
+
+type Store interface {
+	Get(name string) (config.Credential, bool)
 }
 
 const Default = "anthropic"
 
 var Providers = []Spec{
-	{Name: "anthropic", Kind: KindAnthropic, BaseURLEnv: "ANTHROPIC_BASE_URL", KeyEnv: "ANTHROPIC_API_KEY", KeyRequired: true, DefaultModel: "claude-sonnet-5-5", Models: []string{"claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5"}},
-	{Name: "openai", Kind: KindResponses, BaseURL: openai.DefaultBaseURL, BaseURLEnv: "OPENAI_BASE_URL", KeyEnv: "OPENAI_API_KEY", KeyRequired: true, DefaultModel: "gpt-6-sol", Models: []string{"gpt-6-sol", "gpt-6-astra", "gpt-6-luna"}},
-	{Name: "openrouter", Kind: KindChat, BaseURL: "https://openrouter.ai/api/v1", KeyEnv: "OPENROUTER_API_KEY", KeyRequired: true, Example: "anthropic/claude-sonnet-5-5", Models: []string{"anthropic/claude-sonnet-5-5"}},
-	{Name: "ollama", Kind: KindChat, BaseURL: "http://localhost:11434/v1", KeyEnv: "OLLAMA_API_KEY", Example: "qwen3-coder", Local: true},
-	{Name: "lmstudio", Kind: KindChat, BaseURL: "http://localhost:1234/v1", KeyEnv: "LMSTUDIO_API_KEY", Example: "the model id shown in LM Studio", Local: true},
+	{Name: "anthropic", Kind: KindAnthropic, BaseURLEnv: "ANTHROPIC_BASE_URL", KeyEnv: "ANTHROPIC_API_KEY", KeyRequired: true, KeyURL: "platform.claude.com/settings/keys", DefaultModel: "claude-sonnet-5-5", Models: []string{"claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5"}},
+	{Name: "openai", Kind: KindResponses, BaseURL: openai.DefaultBaseURL, BaseURLEnv: "OPENAI_BASE_URL", KeyEnv: "OPENAI_API_KEY", KeyRequired: true, KeyURL: "platform.openai.com/api-keys", DefaultModel: "gpt-6-sol", Models: []string{"gpt-6-sol", "gpt-6-astra", "gpt-6-luna"}},
+	{Name: "openrouter", Kind: KindChat, BaseURL: "https://openrouter.ai/api/v1", BaseURLEnv: "OPENROUTER_BASE_URL", KeyEnv: "OPENROUTER_API_KEY", KeyRequired: true, KeyURL: "openrouter.ai/keys", Example: "anthropic/claude-sonnet-5-5", Models: []string{"anthropic/claude-sonnet-5-5"}},
+	{Name: "ollama", Kind: KindChat, BaseURL: "http://localhost:11434/v1", KeyEnv: "OLLAMA_API_KEY", Example: "qwen3-coder", Local: true, StartHint: "Start it with: ollama serve (install from ollama.com/download)"},
+	{Name: "lmstudio", Kind: KindChat, BaseURL: "http://localhost:1234/v1", KeyEnv: "LMSTUDIO_API_KEY", Example: "the model id shown in LM Studio", Local: true, StartHint: "Open LM Studio and start the server in the Developer tab, or run: lms server start"},
 	{Name: "openai-compatible", Kind: KindChat, BaseURLEnv: "APERTA_BASE_URL", KeyEnv: "APERTA_API_KEY", Example: "the server's model id"},
 }
 
@@ -68,9 +76,18 @@ type Options struct {
 	BaseURL    string
 	UserAgent  string
 	MaxRetries int
+	Store      Store
 }
 
-func (s Spec) baseURL(override string) string {
+func saved(store Store, name string) config.Credential {
+	if store == nil {
+		return config.Credential{}
+	}
+	cred, _ := store.Get(name)
+	return cred
+}
+
+func (s Spec) Base(override string, store Store) string {
 	if override != "" {
 		return override
 	}
@@ -79,17 +96,41 @@ func (s Spec) baseURL(override string) string {
 			return v
 		}
 	}
+	if b := saved(store, s.Name).BaseURL; b != "" {
+		return b
+	}
 	return s.BaseURL
 }
 
-func (s Spec) New(o Options) (provider.Provider, error) {
-	base := s.baseURL(o.BaseURL)
-	if base == "" && s.Kind == KindChat {
-		return nil, fmt.Errorf("%s needs a server URL: pass --base-url or set %s", s.Name, s.BaseURLEnv)
+func (s Spec) Key(store Store) (key, source string) {
+	if v := os.Getenv(s.KeyEnv); v != "" {
+		return v, s.KeyEnv
 	}
-	key := os.Getenv(s.KeyEnv)
+	if k := saved(store, s.Name).APIKey; k != "" {
+		return k, "saved"
+	}
+	return "", ""
+}
+
+var ErrNotConnected = errors.New("not connected")
+
+type NotConnectedError struct {
+	Provider string
+	Reason   string
+}
+
+func (e *NotConnectedError) Error() string { return e.Reason }
+
+func (e *NotConnectedError) Is(target error) bool { return target == ErrNotConnected }
+
+func (s Spec) New(o Options) (provider.Provider, error) {
+	base := s.Base(o.BaseURL, o.Store)
+	if base == "" && s.Kind == KindChat {
+		return nil, &NotConnectedError{Provider: s.Name, Reason: fmt.Sprintf("%s needs a server URL: run aperta connect %s, or pass --base-url", s.Name, s.Name)}
+	}
+	key, _ := s.Key(o.Store)
 	if key == "" && s.KeyRequired {
-		return nil, fmt.Errorf("%s is not set", s.KeyEnv)
+		return nil, &NotConnectedError{Provider: s.Name, Reason: fmt.Sprintf("%s is not connected: run aperta connect %s, or set %s", s.Name, s.Name, s.KeyEnv)}
 	}
 	switch s.Kind {
 	case KindAnthropic:
@@ -117,16 +158,17 @@ func (c Choice) String() string { return c.Provider + "/" + c.Model }
 
 const probeTimeout = 700 * time.Millisecond
 
-func (s Spec) Usable(ctx context.Context, baseOverride string) (bool, []string) {
+func (s Spec) Usable(ctx context.Context, baseOverride string, store Store) (bool, []string) {
+	key, _ := s.Key(store)
 	switch {
 	case s.KeyRequired:
-		return os.Getenv(s.KeyEnv) != "", s.Models
+		return key != "", s.Models
 	case s.Kind == KindChat:
-		base := s.baseURL(baseOverride)
+		base := s.Base(baseOverride, store)
 		if base == "" {
 			return false, nil
 		}
-		models, err := listModels(ctx, base, os.Getenv(s.KeyEnv))
+		models, err := listModels(ctx, base, key)
 		if err != nil && s.Local {
 			return false, nil
 		}
@@ -170,17 +212,19 @@ func listModels(ctx context.Context, base, key string) ([]string, error) {
 	return out, nil
 }
 
-func Available(ctx context.Context, baseOverrides map[string]string, perProvider int) []Choice {
+func Available(ctx context.Context, baseOverrides map[string]string, store Store, perProvider int) ([]Choice, []string) {
 	results := make([][]Choice, len(Providers))
+	usable := make([]bool, len(Providers))
 	var wg sync.WaitGroup
 	for i, s := range Providers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			ok, models := s.Usable(ctx, baseOverrides[s.Name])
+			ok, models := s.Usable(ctx, baseOverrides[s.Name], store)
 			if !ok {
 				return
 			}
+			usable[i] = true
 			if len(models) > perProvider {
 				models = models[:perProvider]
 			}
@@ -195,10 +239,14 @@ func Available(ctx context.Context, baseOverrides map[string]string, perProvider
 	}
 	wg.Wait()
 	var out []Choice
-	for _, r := range results {
+	var missing []string
+	for i, r := range results {
 		out = append(out, r...)
+		if !usable[i] {
+			missing = append(missing, Providers[i].Name)
+		}
 	}
-	return out
+	return out, missing
 }
 
 func ParseChoice(arg, current string) (Choice, error) {

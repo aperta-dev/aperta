@@ -33,6 +33,7 @@ Usage:
   aperta [flags]                open the terminal UI
   aperta run [flags] [prompt]   run one task headless; reads the prompt from stdin if not given
   aperta sessions               list sessions for this directory
+  aperta connect [PROVIDER]     add an API key or local server (no PROVIDER: show status)
   aperta mcp                    list, add or remove MCP servers
   aperta version                print the version
 
@@ -57,6 +58,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return listSessions(args[1:], stdout, stderr)
 		case "mcp":
 			return mcpCommand(args[1:], stdout, stderr)
+		case "connect":
+			return connectCommand(args[1:], stdin, stdout, stderr)
 		case "version", "--version", "-v":
 			fmt.Fprintln(stdout, "aperta", version)
 			return 0
@@ -73,21 +76,23 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 }
 
 type options struct {
-	jsonOut   bool
-	model     string
-	allow     string
-	dir       string
-	maxTurns  int
-	maxTokens int
-	effort    string
-	resume    string
-	cont      bool
-	modelSet  bool
-	prompt    string
-	prov      provider.Provider
-	provider  string
-	provSet   bool
-	baseURL   string
+	jsonOut     bool
+	model       string
+	allow       string
+	dir         string
+	maxTurns    int
+	maxTokens   int
+	effort      string
+	resume      string
+	cont        bool
+	modelSet    bool
+	prompt      string
+	prov        provider.Provider
+	creds       *config.Credentials
+	interactive bool
+	provider    string
+	provSet     bool
+	baseURL     string
 }
 
 func parse(name string, args []string, headlessMode bool, stderr io.Writer) (*options, int) {
@@ -145,6 +150,7 @@ func start(args []string, headlessMode bool, stdin io.Reader, stdout, stderr io.
 	if o == nil {
 		return code
 	}
+	o.interactive = !headlessMode
 	if headlessMode && o.prompt == "" {
 		p, code := readPrompt(stdin, stderr)
 		if code >= 0 {
@@ -207,11 +213,22 @@ func (a *app) tuiOptions() tui.Options {
 	return tui.Options{Agent: a.agent, Gate: a.gate, Session: a.sess, History: a.history, Version: version, Servers: a.servers, Models: a.models}
 }
 
+func credentialsPath() string { return filepath.Join(session.Home(), "credentials.json") }
+
+func loadCredentials(stderr io.Writer) *config.Credentials {
+	creds, err := config.LoadCredentials(credentialsPath())
+	if err != nil {
+		fmt.Fprintln(stderr, "warning: ignoring saved keys:", err)
+	}
+	return creds
+}
+
 func setup(o *options, stderr io.Writer) (*app, error) {
 	workDir, err := resolveDir(o.dir)
 	if err != nil {
 		return nil, err
 	}
+	o.creds = loadCredentials(stderr)
 	sess, history, err := openSession(o, workDir, stderr)
 	if err != nil {
 		return nil, err
@@ -240,11 +257,19 @@ func setup(o *options, stderr io.Writer) (*app, error) {
 		Recorder:    sess,
 		Messages:    history,
 	}
-	sw := &switcher{sess: sess, project: workDir, baseFor: map[string]string{}}
+	conns := &catalog.Connections{Store: o.creds, Overrides: map[string]string{}}
 	if o.baseURL != "" {
-		sw.baseFor[o.provider] = o.baseURL
+		conns.Overrides[o.provider] = o.baseURL
 	}
+	sw := &switcher{sess: sess, project: workDir, conns: conns}
 	return &app{agent: agent, gate: gate, sess: sess, history: history, servers: servers, models: sw}, nil
+}
+
+func (o *options) store() catalog.Store {
+	if o.creds == nil {
+		return nil
+	}
+	return o.creds
 }
 
 func statePath() string { return filepath.Join(session.Home(), "state.json") }
@@ -260,16 +285,11 @@ func openSession(o *options, workDir string, stderr io.Writer) (*session.Session
 		id = latest
 	}
 	if id == "" {
-		last, ok := config.LastModel(statePath(), workDir)
-		prov, model := o.provider, o.model
-		err := chooseProvider(o, last.Provider, last.Model)
-		if err != nil && ok && !o.provSet && !o.modelSet {
-			fmt.Fprintf(stderr, "warning: last model %s/%s is not usable (%v); using the default\n", last.Provider, last.Model, err)
-			o.provider, o.model = prov, model
-			err = chooseProvider(o, "", "")
-		}
-		if err != nil {
-			return nil, nil, err
+		if err := pickStartProvider(o, workDir, stderr); err != nil {
+			if !o.interactive || !errors.Is(err, catalog.ErrNotConnected) {
+				return nil, nil, err
+			}
+			o.prov, o.provider, o.model = nil, "", ""
 		}
 		s, err := session.Create(dir, workDir, o.provider, o.model, version)
 		return s, nil, err
@@ -283,10 +303,12 @@ func openSession(o *options, workDir string, stderr io.Writer) (*session.Session
 		return nil, nil, err
 	}
 	if err := chooseProvider(o, s.Provider, s.Model); err != nil {
-		s.Close()
-		return nil, nil, err
-	}
-	if err := s.SetModel(o.provider, o.model); err != nil {
+		if !o.interactive || !errors.Is(err, catalog.ErrNotConnected) {
+			s.Close()
+			return nil, nil, err
+		}
+		o.prov = nil
+	} else if err := s.SetModel(o.provider, o.model); err != nil {
 		s.Close()
 		return nil, nil, err
 	}
@@ -300,6 +322,33 @@ func openSession(o *options, workDir string, stderr io.Writer) (*session.Session
 		}
 	}
 	return s, msgs, nil
+}
+
+func pickStartProvider(o *options, workDir string, stderr io.Writer) error {
+	if o.provSet || o.modelSet {
+		return chooseProvider(o, "", "")
+	}
+	if last, ok := config.LastModel(statePath(), workDir); ok {
+		err := chooseProvider(o, last.Provider, last.Model)
+		if err == nil {
+			return nil
+		}
+		fmt.Fprintf(stderr, "warning: last model %s/%s is not usable (%v)\n", last.Provider, last.Model, err)
+	}
+	err := chooseProvider(o, "", "")
+	if !errors.Is(err, catalog.ErrNotConnected) {
+		return err
+	}
+	for _, spec := range catalog.Providers {
+		if !spec.KeyRequired || spec.DefaultModel == "" {
+			continue
+		}
+		if key, _ := spec.Key(o.creds); key != "" {
+			o.provider, o.model = "", ""
+			return chooseProvider(o, spec.Name, spec.DefaultModel)
+		}
+	}
+	return &catalog.NotConnectedError{Reason: "no provider is connected yet: run aperta connect, or set ANTHROPIC_API_KEY or OPENAI_API_KEY"}
 }
 
 func chooseProvider(o *options, sessProvider, sessModel string) error {
@@ -326,7 +375,7 @@ func chooseProvider(o *options, sessProvider, sessModel string) error {
 	if o.model == "" {
 		return errors.New(spec.ModelHint())
 	}
-	o.prov, err = spec.New(catalog.Options{BaseURL: o.baseURL, UserAgent: "aperta/" + version, MaxRetries: 4})
+	o.prov, err = spec.New(catalog.Options{BaseURL: o.baseURL, UserAgent: "aperta/" + version, MaxRetries: 4, Store: o.store()})
 	return err
 }
 
