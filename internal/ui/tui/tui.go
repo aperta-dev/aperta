@@ -16,6 +16,7 @@ import (
 
 	"gitlab.com/aperta/aperta/internal/core"
 	"gitlab.com/aperta/aperta/internal/provider"
+	"gitlab.com/aperta/aperta/internal/provider/catalog"
 	"gitlab.com/aperta/aperta/internal/session"
 	"gitlab.com/aperta/aperta/internal/tool/mcp"
 )
@@ -30,18 +31,26 @@ type Options struct {
 	Output  io.Writer
 	Size    [2]int
 	Servers *mcp.Manager
+	Models  ModelSwitcher
+}
+
+type ModelSwitcher interface {
+	Choices(ctx context.Context) []catalog.Choice
+	Switch(c catalog.Choice) (provider.Provider, error)
 }
 
 const help = `Enter sends. Shift+Enter, Alt+Enter or Ctrl+J adds a line.
 Esc stops the running turn. Ctrl+C stops the turn, clears the input, or quits.
+/model picks a model. /model <provider>/<model> or /model <model> switches directly.
 /exit quits. Resume later with: aperta -c`
 
 type (
-	liveMsg   string
-	statusMsg string
-	usageMsg  provider.Usage
-	doneMsg   struct{ err error }
-	askMsg    struct {
+	liveMsg    string
+	statusMsg  string
+	usageMsg   provider.Usage
+	doneMsg    struct{ err error }
+	choicesMsg []catalog.Choice
+	askMsg     struct {
 		req   core.PermissionRequest
 		rule  string
 		reply chan core.Decision
@@ -59,6 +68,8 @@ type model struct {
 	live     string
 	status   string
 	ask      *askMsg
+	pick     *picker
+	pending  *pendingModel
 	total    provider.Usage
 	quitting bool
 }
@@ -143,8 +154,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case askMsg:
 		m.ask = &msg
 		return m, nil
+	case choicesMsg:
+		if m.pick != nil {
+			m.pick.load(m.current(), msg)
+		}
+		return m, nil
 	case doneMsg:
 		m.running, m.cancel, m.live, m.status, m.ask = false, nil, "", "", nil
+		m.applyPending()
 		if errors.Is(msg.err, context.Canceled) {
 			return m, tea.Println(warn.Render("stopped"))
 		}
@@ -188,6 +205,9 @@ func (m *model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	if m.pick != nil {
+		return m.pickKey(k)
+	}
 	switch k {
 	case "ctrl+c":
 		switch {
@@ -218,7 +238,7 @@ func (m *model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (m *model) submit() (tea.Model, tea.Cmd) {
 	text := strings.TrimSpace(m.input.Value())
-	if text == "" || m.running {
+	if text == "" || m.running && text != "/help" && text != "/model" && !strings.HasPrefix(text, "/model ") {
 		return m, nil
 	}
 	m.input.Reset()
@@ -227,6 +247,15 @@ func (m *model) submit() (tea.Model, tea.Cmd) {
 		return m.quit()
 	case "/help":
 		return m, tea.Println(dim.Render(help))
+	case "/model":
+		return m.openPicker()
+	}
+	if arg, ok := strings.CutPrefix(text, "/model "); ok {
+		c, err := catalog.ParseChoice(arg, m.opts.Agent.Provider.Name())
+		if err != nil {
+			return m, tea.Println(errText.Render("model: " + err.Error()))
+		}
+		return m, m.switchTo(c)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m.running, m.cancel, m.status = true, cancel, "working"
@@ -304,10 +333,12 @@ func (m *model) View() tea.View {
 	switch {
 	case m.ask != nil:
 		b.WriteString(m.askView())
+	case m.pick != nil:
+		b.WriteString(m.pick.view(m.current()))
 	case m.running:
 		b.WriteString(accent.Render(m.spin.View()) + " " + m.status + dim.Render(" · esc to stop") + "\n")
 	}
-	if m.ask == nil {
+	if m.ask == nil && m.pick == nil {
 		b.WriteString(m.input.View() + "\n")
 	}
 	b.WriteString(dim.Render(m.footer()))
@@ -335,7 +366,7 @@ func (m *model) askView() string {
 }
 
 func (m *model) footer() string {
-	parts := []string{m.opts.Agent.Model}
+	parts := []string{m.current().String()}
 	if m.opts.Session != nil {
 		parts = append(parts, m.opts.Session.ID)
 	}

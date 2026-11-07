@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -15,6 +16,7 @@ import (
 
 	"gitlab.com/aperta/aperta/internal/core"
 	"gitlab.com/aperta/aperta/internal/provider"
+	"gitlab.com/aperta/aperta/internal/provider/catalog"
 	"gitlab.com/aperta/aperta/internal/tool"
 )
 
@@ -239,5 +241,151 @@ func TestPermissionPromptReplacesInputAndIgnoresEnter(t *testing.T) {
 		if m.ask != nil || !strings.Contains(plain(), "Ask Aperta") {
 			t.Errorf("rule %q: input not back after answering", c.rule)
 		}
+	}
+}
+
+type fakeModels struct {
+	mu       sync.Mutex
+	choices  []catalog.Choice
+	switched []catalog.Choice
+	fail     error
+}
+
+func (f *fakeModels) Choices(ctx context.Context) []catalog.Choice { return f.choices }
+
+func (f *fakeModels) Switch(c catalog.Choice) (provider.Provider, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.fail != nil {
+		return nil, f.fail
+	}
+	f.switched = append(f.switched, c)
+	return &named{name: c.Provider}, nil
+}
+
+func (f *fakeModels) last() []catalog.Choice {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]catalog.Choice(nil), f.switched...)
+}
+
+type named struct {
+	scripted
+	name string
+}
+
+func (n *named) Name() string { return n.name }
+
+func startModelUI(t *testing.T, models *fakeModels) (*tea.Program, *core.Agent, *screen) {
+	t.Helper()
+	agent := &core.Agent{Provider: &named{name: "anthropic"}, Model: "claude-sonnet-5-5", Tools: tool.Defaults(), Dir: t.TempDir()}
+	out := &screen{}
+	p := New(Options{Agent: agent, Version: "test", Output: out, Size: [2]int{100, 30}, Models: models})
+	go p.Run()
+	t.Cleanup(p.Kill)
+	waitFor(t, "start", func() bool { return strings.Contains(out.text(), "Aperta test") })
+	return p, agent, out
+}
+
+func typeLine(p *tea.Program, text string) {
+	p.Send(tea.PasteMsg{Content: text})
+	p.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+}
+
+func TestModelCommandSwitchesDirectly(t *testing.T) {
+	models := &fakeModels{}
+	p, agent, out := startModelUI(t, models)
+	typeLine(p, "/model openai/gpt-6-luna")
+	waitFor(t, "confirmation", func() bool { return strings.Contains(out.text(), "model: openai/gpt-6-luna") })
+	waitFor(t, "footer", func() bool { return strings.Count(out.text(), "openai/gpt-6-luna") >= 2 })
+	typeLine(p, "/model gpt-6-astra")
+	waitFor(t, "same-provider switch", func() bool { return strings.Contains(out.text(), "model: openai/gpt-6-astra") })
+	typeLine(p, "/model openrouter/anthropic/claude-haiku-4-5")
+	waitFor(t, "nested id", func() bool { return strings.Contains(out.text(), "model: openrouter/anthropic/claude-haiku-4-5") })
+	typeLine(p, "/model ollama")
+	waitFor(t, "no default", func() bool { return strings.Contains(out.text(), "ollama has no default model") })
+	got := models.last()
+	want := []catalog.Choice{{Provider: "openai", Model: "gpt-6-luna"}, {Provider: "openai", Model: "gpt-6-astra"}, {Provider: "openrouter", Model: "anthropic/claude-haiku-4-5"}}
+	if len(got) != len(want) {
+		t.Fatalf("switched %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("switch %d = %v, want %v", i, got[i], want[i])
+		}
+	}
+	waitFor(t, "agent updated", func() bool {
+		return agent.Model == "anthropic/claude-haiku-4-5" && agent.Provider.Name() == "openrouter"
+	})
+	models.fail = errors.New("OPENAI_API_KEY is not set")
+	typeLine(p, "/model openai/gpt-6-sol")
+	waitFor(t, "failed switch", func() bool { return strings.Contains(out.text(), "model: OPENAI_API_KEY is not set") })
+	if agent.Provider.Name() != "openrouter" {
+		t.Error("a failed switch changed the provider")
+	}
+	typeLine(p, "/help")
+	waitFor(t, "help", func() bool { return strings.Contains(out.text(), "/model picks a model") })
+}
+
+func TestModelPickerKeysAndEsc(t *testing.T) {
+	models := &fakeModels{choices: []catalog.Choice{
+		{Provider: "anthropic", Model: "claude-sonnet-5-5", Note: "default"},
+		{Provider: "anthropic", Model: "claude-opus-5-5"},
+		{Provider: "ollama", Model: "qwen3-coder"},
+	}}
+	p, _, out := startModelUI(t, models)
+	m := func() string { return out.text() }
+	typeLine(p, "/model")
+	waitFor(t, "picker", func() bool { return strings.Contains(m(), "press 1-4 or ↑↓ and enter") })
+	for _, want := range []string{"1 anthropic/claude-sonnet-5-5  current, default", "2 anthropic/claude-opus-5-5", "3 ollama/qwen3-coder", "4 type a model id", "esc = cancel"} {
+		if !strings.Contains(m(), want) {
+			t.Errorf("picker is missing %q:\n%s", want, m())
+		}
+	}
+	p.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
+	time.Sleep(100 * time.Millisecond)
+	if len(models.last()) != 0 {
+		t.Fatal("esc switched the model")
+	}
+	typeLine(p, "/model")
+	waitFor(t, "picker again", func() bool { return strings.Count(m(), "Switch model") >= 2 })
+	time.Sleep(50 * time.Millisecond)
+	p.Send(tea.KeyPressMsg{Code: tea.KeyDown})
+	p.Send(tea.KeyPressMsg{Code: tea.KeyDown})
+	p.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, "arrow pick", func() bool { return strings.Contains(m(), "model: ollama/qwen3-coder") })
+	typeLine(p, "/model")
+	time.Sleep(100 * time.Millisecond)
+	p.Send(tea.KeyPressMsg{Code: '3', Text: "3"})
+	waitFor(t, "number pick", func() bool { return strings.Contains(m(), "model: anthropic/claude-opus-5-5") })
+	got := models.last()
+	if len(got) != 2 || got[0].Model != "qwen3-coder" || got[1].Model != "claude-opus-5-5" {
+		t.Errorf("switched %v", got)
+	}
+	typeLine(p, "/model")
+	time.Sleep(100 * time.Millisecond)
+	p.Send(tea.KeyPressMsg{Code: '4', Text: "4"})
+	p.Send(tea.PasteMsg{Content: "lmstudio/my-model"})
+	p.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, "typed id", func() bool { return strings.Contains(m(), "model: lmstudio/my-model") })
+}
+
+func TestModelSwitchDuringTurnWaitsForNextTurn(t *testing.T) {
+	models := &fakeModels{}
+	agent := &core.Agent{Provider: &named{name: "anthropic"}, Model: "claude-sonnet-5-5", Tools: tool.Defaults(), Dir: t.TempDir()}
+	out := &screen{}
+	p := New(Options{Agent: agent, Version: "test", Output: out, Size: [2]int{100, 30}, Models: models})
+	done := make(chan struct{})
+	go func() { p.Run(); close(done) }()
+	typeLine(p, "think forever")
+	waitFor(t, "running", func() bool { return strings.Contains(out.text(), "esc to stop") })
+	typeLine(p, "/model openai/gpt-6-luna")
+	waitFor(t, "pending line", func() bool { return strings.Contains(out.text(), "model: openai/gpt-6-luna (from the next turn)") })
+	p.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
+	waitFor(t, "stopped", func() bool { return strings.Contains(out.text(), "stopped") })
+	p.Quit()
+	<-done
+	if agent.Provider.Name() != "openai" || agent.Model != "gpt-6-luna" {
+		t.Errorf("pending switch not applied after the turn: %s/%s", agent.Provider.Name(), agent.Model)
 	}
 }

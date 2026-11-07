@@ -119,6 +119,19 @@ func buildRequest(req provider.Request) wireRequest {
 	return w
 }
 
+func toolID(id string) string {
+	b := []byte(id)
+	for i, c := range b {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-') {
+			b[i] = '_'
+		}
+	}
+	if len(b) == 0 {
+		return "call"
+	}
+	return string(b)
+}
+
 func ownThinking(b provider.Block) bool {
 	return (b.Origin == "" || b.Origin == Origin) && (b.Signature != "" || b.Data != "")
 }
@@ -145,9 +158,9 @@ func wireBlock(b provider.Block) map[string]any {
 		if len(input) == 0 {
 			input = json.RawMessage("{}")
 		}
-		return map[string]any{"type": "tool_use", "id": b.ID, "name": b.Name, "input": input}
+		return map[string]any{"type": "tool_use", "id": toolID(b.ID), "name": b.Name, "input": input}
 	case provider.BlockToolResult:
-		out := map[string]any{"type": "tool_result", "tool_use_id": b.ToolUseID, "content": b.Content}
+		out := map[string]any{"type": "tool_result", "tool_use_id": toolID(b.ToolUseID), "content": b.Content}
 		if b.IsError {
 			out["is_error"] = true
 		}

@@ -14,6 +14,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"gitlab.com/aperta/aperta/internal/config"
 	"gitlab.com/aperta/aperta/internal/core"
 	"gitlab.com/aperta/aperta/internal/provider"
 	"gitlab.com/aperta/aperta/internal/provider/catalog"
@@ -155,44 +156,15 @@ func start(args []string, headlessMode bool, stdin io.Reader, stdout, stderr io.
 		fmt.Fprintln(stderr, "the terminal UI needs a terminal; use aperta run for scripts")
 		return 2
 	}
-	workDir, err := resolveDir(o.dir)
+	a, err := setup(o, stderr)
 	if err != nil {
 		fmt.Fprintln(stderr, "error:", err)
 		return 1
 	}
-	sess, history, err := openSession(o, workDir)
-	if err != nil {
-		fmt.Fprintln(stderr, "error:", err)
-		return 1
-	}
-	defer sess.Close()
-	rules, err := core.LoadRules(filepath.Join(session.Home(), "permissions.json"), workDir)
-	if err != nil {
-		fmt.Fprintln(stderr, "warning: ignoring saved permissions:", err)
-	}
-	mcpCfg, err := mcp.LoadConfig(mcpPath())
-	if err != nil {
-		fmt.Fprintln(stderr, "warning: ignoring MCP servers:", err)
-	}
-	servers := mcp.Start(mcpCfg, mcp.Options{Dir: workDir, LogDir: filepath.Join(session.Home(), "logs"), Version: version})
-	defer servers.Close()
-	gate := &core.Gate{AllowAll: o.allow == "all", Rules: rules}
-	agent := &core.Agent{
-		Provider:    o.prov,
-		Model:       o.model,
-		System:      core.SystemPrompt(workDir, time.Now()),
-		Tools:       tool.Defaults(),
-		Toolsets:    []tool.Set{servers},
-		Permissions: gate,
-		Dir:         workDir,
-		MaxTurns:    o.maxTurns,
-		MaxTokens:   o.maxTokens,
-		Effort:      o.effort,
-		Recorder:    sess,
-		Messages:    history,
-	}
+	defer a.close()
+	agent, sess, servers := a.agent, a.sess, a.servers
 	if !headlessMode {
-		if err := tui.Run(tui.Options{Agent: agent, Gate: gate, Session: sess, History: history, Version: version, Servers: servers}); err != nil {
+		if err := tui.Run(a.tuiOptions()); err != nil {
 			fmt.Fprintln(stderr, "error:", err)
 			return 1
 		}
@@ -217,7 +189,67 @@ func start(args []string, headlessMode bool, stdin io.Reader, stdout, stderr io.
 	return 0
 }
 
-func openSession(o *options, workDir string) (*session.Session, []provider.Message, error) {
+type app struct {
+	agent   *core.Agent
+	gate    *core.Gate
+	sess    *session.Session
+	history []provider.Message
+	servers *mcp.Manager
+	models  *switcher
+}
+
+func (a *app) close() {
+	a.servers.Close()
+	a.sess.Close()
+}
+
+func (a *app) tuiOptions() tui.Options {
+	return tui.Options{Agent: a.agent, Gate: a.gate, Session: a.sess, History: a.history, Version: version, Servers: a.servers, Models: a.models}
+}
+
+func setup(o *options, stderr io.Writer) (*app, error) {
+	workDir, err := resolveDir(o.dir)
+	if err != nil {
+		return nil, err
+	}
+	sess, history, err := openSession(o, workDir, stderr)
+	if err != nil {
+		return nil, err
+	}
+	rules, err := core.LoadRules(filepath.Join(session.Home(), "permissions.json"), workDir)
+	if err != nil {
+		fmt.Fprintln(stderr, "warning: ignoring saved permissions:", err)
+	}
+	mcpCfg, err := mcp.LoadConfig(mcpPath())
+	if err != nil {
+		fmt.Fprintln(stderr, "warning: ignoring MCP servers:", err)
+	}
+	servers := mcp.Start(mcpCfg, mcp.Options{Dir: workDir, LogDir: filepath.Join(session.Home(), "logs"), Version: version})
+	gate := &core.Gate{AllowAll: o.allow == "all", Rules: rules}
+	agent := &core.Agent{
+		Provider:    o.prov,
+		Model:       o.model,
+		System:      core.SystemPrompt(workDir, time.Now()),
+		Tools:       tool.Defaults(),
+		Toolsets:    []tool.Set{servers},
+		Permissions: gate,
+		Dir:         workDir,
+		MaxTurns:    o.maxTurns,
+		MaxTokens:   o.maxTokens,
+		Effort:      o.effort,
+		Recorder:    sess,
+		Messages:    history,
+	}
+	sw := &switcher{sess: sess, project: workDir, baseFor: map[string]string{}}
+	if o.baseURL != "" {
+		sw.baseFor[o.provider] = o.baseURL
+	}
+	return &app{agent: agent, gate: gate, sess: sess, history: history, servers: servers, models: sw}, nil
+}
+
+func statePath() string { return filepath.Join(session.Home(), "state.json") }
+
+func openSession(o *options, workDir string, stderr io.Writer) (*session.Session, []provider.Message, error) {
 	dir := session.Dir()
 	id := o.resume
 	if o.cont {
@@ -228,7 +260,15 @@ func openSession(o *options, workDir string) (*session.Session, []provider.Messa
 		id = latest
 	}
 	if id == "" {
-		if err := chooseProvider(o, "", ""); err != nil {
+		last, ok := config.LastModel(statePath(), workDir)
+		prov, model := o.provider, o.model
+		err := chooseProvider(o, last.Provider, last.Model)
+		if err != nil && ok && !o.provSet && !o.modelSet {
+			fmt.Fprintf(stderr, "warning: last model %s/%s is not usable (%v); using the default\n", last.Provider, last.Model, err)
+			o.provider, o.model = prov, model
+			err = chooseProvider(o, "", "")
+		}
+		if err != nil {
 			return nil, nil, err
 		}
 		s, err := session.Create(dir, workDir, o.provider, o.model, version)
