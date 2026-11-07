@@ -39,3 +39,11 @@ Pulled in by those libraries (indirect, linked into the binary):
 | golang.org/x/time | v0.15.0 | BSD-3-Clause |
 
 Checked with `go version -m` on the built binary. Test-only and unlinked modules in go.sum are not listed.
+
+Used only by `make smoke` (`tools/smoke`), never linked into the `aperta` binary:
+
+| Package | Version | License | Why |
+| --- | --- | --- | --- |
+| github.com/creack/pty | v1.1.24 | MIT | Runs the real binary in a pseudo-terminal |
+| github.com/charmbracelet/x/vt | v0.1.0 | MIT | Terminal emulator that turns the output into a readable screen |
+| github.com/charmbracelet/x/exp/ordered | v0.1.0 | MIT | Pulled in by x/vt |

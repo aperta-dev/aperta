@@ -231,3 +231,55 @@ func TestModelsCacheAndFallback(t *testing.T) {
 		t.Errorf("recovered fetch: %d", len(list))
 	}
 }
+
+func TestCheckRetriesANewKey(t *testing.T) {
+	old := RetryDelays
+	RetryDelays = []time.Duration{10 * time.Millisecond, 20 * time.Millisecond}
+	t.Cleanup(func() { RetryDelays = old })
+	var calls atomic.Int32
+	okAfter := int32(3)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) < okAfter {
+			w.WriteHeader(401)
+			w.Write([]byte(`{"error":{"message":"User not found.","code":401}}`))
+			return
+		}
+		w.Write([]byte(`{"data":{}}`))
+	}))
+	defer srv.Close()
+	spec, _ := Lookup("openrouter")
+	var notes []string
+	ctx := WithProgress(context.Background(), func(n string) { notes = append(notes, n) })
+	if err := Check(ctx, spec, "k", srv.URL+"/api/v1"); err != nil {
+		t.Fatalf("a key that works on the third try was refused: %v", err)
+	}
+	if calls.Load() != 3 || len(notes) != 2 || notes[0] != RetryNote {
+		t.Errorf("calls %d, notes %q", calls.Load(), notes)
+	}
+	calls.Store(0)
+	okAfter = 100
+	err := Check(context.Background(), spec, "k", srv.URL+"/api/v1")
+	if err == nil || calls.Load() != 3 {
+		t.Fatalf("always-401: err %v after %d calls", err, calls.Load())
+	}
+	if want := "rejected the key (401). Check that you copied the whole key; if you just created it, wait a minute and try again"; !strings.Contains(err.Error(), want) {
+		t.Errorf("message = %q", err)
+	}
+	calls.Store(0)
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(404)
+	}))
+	defer srv2.Close()
+	if err := Check(context.Background(), spec, "k", srv2.URL); err == nil || calls.Load() != 1 {
+		t.Errorf("a 404 was retried: %d calls, %v", calls.Load(), err)
+	}
+	anth, _ := Lookup("anthropic")
+	ctx2, cancel := context.WithCancel(context.Background())
+	RetryDelays = []time.Duration{time.Hour}
+	go func() { time.Sleep(50 * time.Millisecond); cancel() }()
+	start := time.Now()
+	if err := Check(ctx2, anth, "k", srv.URL); err == nil || time.Since(start) > 5*time.Second {
+		t.Errorf("cancel during the wait did not stop the check: %v", err)
+	}
+}

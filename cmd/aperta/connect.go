@@ -96,6 +96,8 @@ func connectCommand(args []string, stdin io.Reader, stdout, stderr io.Writer) in
 		fmt.Fprintln(stderr, "error:", err)
 		return 1
 	}
+	fmt.Fprintf(stderr, "checking the key with %s...\n", spec.Name)
+	ctx = catalog.WithProgress(ctx, func(note string) { fmt.Fprintln(stderr, note) })
 	if err := conns.Connect(ctx, spec.Name, key, *baseURL); err != nil {
 		fmt.Fprintln(stderr, "not saved:", err)
 		return 1

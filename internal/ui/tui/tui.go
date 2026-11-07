@@ -188,7 +188,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case provsMsg, modelsMsg:
 		return m.pickMsg(msg)
-	case statusesMsg, connectResultMsg:
+	case statusesMsg, connectResultMsg, connectNoteMsg:
 		return m.connectMsg(msg)
 	case doneMsg:
 		m.running, m.cancel, m.live, m.status, m.ask = false, nil, "", "", nil
@@ -384,7 +384,7 @@ func (m *model) View() tea.View {
 	case m.ask != nil:
 		b.WriteString(m.askView())
 	case m.conn != nil:
-		b.WriteString(m.conn.view())
+		b.WriteString(m.conn.view(m.width))
 	case m.pick != nil:
 		b.WriteString(m.pick.view(m.current()))
 	case m.running:

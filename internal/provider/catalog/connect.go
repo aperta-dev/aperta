@@ -157,7 +157,58 @@ func (c *Connections) Disconnect(name string) error {
 	return c.Store.Delete(name)
 }
 
+var RetryDelays = []time.Duration{3 * time.Second, 8 * time.Second}
+
+const RetryNote = "checking again, new keys can take a moment..."
+
+type progressKey struct{}
+
+func WithProgress(ctx context.Context, fn func(string)) context.Context {
+	return context.WithValue(ctx, progressKey{}, fn)
+}
+
+func progress(ctx context.Context, msg string) {
+	if fn, ok := ctx.Value(progressKey{}).(func(string)); ok && fn != nil {
+		fn(msg)
+	}
+}
+
+type rejected struct{ status int }
+
+func (r rejected) Error() string { return fmt.Sprint(r.status) }
+
 func Check(ctx context.Context, s Spec, key, base string) error {
+	err := checkOnce(ctx, s, key, base)
+	for _, wait := range RetryDelays {
+		var rj rejected
+		if !errors.As(err, &rj) {
+			break
+		}
+		progress(ctx, RetryNote)
+		t := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return ctx.Err()
+		case <-t.C:
+		}
+		err = checkOnce(ctx, s, key, base)
+	}
+	var rj rejected
+	if errors.As(err, &rj) {
+		if base == "" {
+			base = anthropic.DefaultBaseURL
+		}
+		host := base
+		if u, perr := url.Parse(base); perr == nil && u.Host != "" {
+			host = u.Host
+		}
+		return fmt.Errorf("%s rejected the key (%d). Check that you copied the whole key; if you just created it, wait a minute and try again", host, rj.status)
+	}
+	return err
+}
+
+func checkOnce(ctx context.Context, s Spec, key, base string) error {
 	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
 	defer cancel()
 	if base == "" {
@@ -196,7 +247,7 @@ func Check(ctx context.Context, s Spec, key, base string) error {
 	_, msg := transport.ParseError(raw)
 	switch res.StatusCode {
 	case http.StatusUnauthorized, http.StatusForbidden:
-		return fmt.Errorf("%s rejected the key (%d). Check that you copied the whole key", host, res.StatusCode)
+		return rejected{res.StatusCode}
 	case http.StatusPaymentRequired:
 		return fmt.Errorf("%s accepted the key but the account has no credit left (402)", host)
 	case http.StatusNotFound:

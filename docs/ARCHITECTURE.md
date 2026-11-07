@@ -101,6 +101,17 @@ Before adding a library, check its current docs and versions; don't pick from me
 - **Not in v0.3**: OAuth for HTTP MCP servers (use a header token), project-level MCP config (needs a trust prompt, comes with config in v0.4), MCP prompts and resources, and the input-required tool results from the 2026-07-28 spec.
 - **Tests**: `cmd/aperta/providers_test.go` runs the real binary against a fake Responses API (retry on 429, verbatim replay of reasoning and phase, usage), a fake Chat Completions server (split tool calls, no `[DONE]`), a switch from OpenAI to Anthropic mid-session, and real MCP servers over stdio (the test binary itself) and streamable HTTP with a header token.
 
+## Smoke suite
+
+`make smoke` (`tools/smoke`) builds the real binary and drives it in a pseudo-terminal (`creack/pty`), reading the screen through a terminal emulator (`charmbracelet/x/vt`). It uses a temp `APERTA_HOME` and the user's real keys: `OPENROUTER_API_KEY` and `ANTHROPIC_API_KEY` from the environment, or the keys in `~/.aperta/credentials.json`. The flows:
+
+- **One terminal session**: first run with no provider, `/connect` with a bracketed paste, `/model` filter and pick a free OpenRouter model, a real reply, an edit that must ask first (it is approved and the file must change), and Ctrl+C mid-stream, which must say "stopped" and leave the app usable before Ctrl+C quits.
+- **Separate runs**: `aperta -c` with the history, headless `run --json`, the OpenAI Responses adapter via OpenRouter, Anthropic Haiku headless, a 60-column terminal, a bad key in `/connect` and in headless mode, and a scan that no key reaches any file but `credentials.json`.
+
+Before any flow, each key is checked once (OpenRouter `GET /api/v1/key`, Anthropic `GET /v1/models`). A rejected key prints one line with the reason and the fix (`aperta connect <provider>`), every flow that needs it is SKIPped with that line, and the run exits non-zero, so a dead key can't look green or cascade into failures. A reply only counts when a finished turn is saved to the session. Flows without a key are SKIPped, keys are masked in all output, each flow is capped at 3 minutes and the run at 5, and only free models plus OpenAI's cheapest (`gpt-5-nano`) and Claude Haiku are used. A full run takes about 25 seconds.
+
+**OpenAI Responses via OpenRouter is a compatibility check, not OpenAI itself.** There is no OpenAI key, so the `openai` provider is pointed at `https://openrouter.ai/api/v1/responses`. A local recording proxy confirms the request after a tool call sends back the reasoning item, the function call and its output. The OpenAI `/v1/models` list cleanup is covered by fixtures only.
+
 ## Open questions
 
 What makes Aperta stand out is not decided. Candidates:

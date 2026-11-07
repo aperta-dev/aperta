@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"gitlab.com/aperta/aperta/internal/config"
 	"gitlab.com/aperta/aperta/internal/provider/catalog"
@@ -24,6 +25,7 @@ const (
 
 type (
 	statusesMsg      []catalog.Status
+	connectNoteMsg   struct{ name, note string }
 	connectResultMsg struct {
 		name   string
 		masked string
@@ -44,6 +46,7 @@ type connector struct {
 	note    string
 	busy    string
 	cancel  context.CancelFunc
+	width   int
 }
 
 func needsURL(s catalog.Status) bool { return !s.KeyRequired && !s.Local }
@@ -73,11 +76,15 @@ func (m *model) connectMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if c.sel >= len(c.rows) {
 			c.sel = 0
 		}
+	case connectNoteMsg:
+		if c.step == connBusy && msg.name == c.cur.Name {
+			c.note = msg.note
+		}
 	case connectResultMsg:
 		if c.step != connBusy || msg.name != c.cur.Name {
 			return m, nil
 		}
-		c.cancel = nil
+		c.cancel, c.note = nil, ""
 		if msg.err != nil {
 			c.errLine = msg.err.Error()
 			if msg.local {
@@ -268,18 +275,24 @@ func (m *model) submitKey(key string) (tea.Model, tea.Cmd) {
 	if needsURL(st) {
 		c.busy = "checking " + c.url + "..."
 	}
-	models, name, url := m.opts.Models, st.Name, c.url
+	models, name, url, prog := m.opts.Models, st.Name, c.url, m.prog
 	masked := ""
 	if key != "" {
 		masked = config.Mask(key)
 	}
+	ctx = catalog.WithProgress(ctx, func(note string) {
+		if prog != nil {
+			prog.Send(connectNoteMsg{name: name, note: note})
+		}
+	})
 	return m, func() tea.Msg {
 		defer cancel()
 		return connectResultMsg{name: name, masked: masked, err: models.Connect(ctx, name, key, url)}
 	}
 }
 
-func (c *connector) view() string {
+func (c *connector) view(width int) string {
+	c.width = width
 	var b strings.Builder
 	switch c.step {
 	case connList:
@@ -301,7 +314,7 @@ func (c *connector) view() string {
 			b.WriteString(mark + bold.Render(fmt.Sprint(i+1)) + " " + name + status + "\n")
 		}
 		if c.note != "" {
-			b.WriteString(dim.Render("  "+c.note) + "\n")
+			b.WriteString(wrapIndent(dim, c.note, c.width) + "\n")
 		}
 		b.WriteString(warn.Render(fmt.Sprintf("press 1-%d or ↑↓ and enter", len(c.rows))) + dim.Render(" · d = disconnect (esc = cancel)") + "\n")
 	case connURL:
@@ -323,7 +336,11 @@ func (c *connector) view() string {
 		b.WriteString(warn.Render("enter = check and save") + dim.Render(" · esc = back") + "\n")
 	case connBusy:
 		b.WriteString("\n" + warn.Render("Connect "+c.cur.Name) + "\n")
-		b.WriteString(dim.Render("  "+c.busy) + "\n" + dim.Render("esc = cancel") + "\n")
+		b.WriteString(wrapIndent(dim, c.busy, c.width) + "\n")
+		if c.note != "" {
+			b.WriteString(wrapIndent(dim, c.note, c.width) + "\n")
+		}
+		b.WriteString(dim.Render("esc = cancel") + "\n")
 	case connLocal:
 		b.WriteString("\n" + warn.Render("Connect "+c.cur.Name) + "\n")
 		c.writeErr(&b)
@@ -337,6 +354,13 @@ func (c *connector) view() string {
 
 func (c *connector) writeErr(b *strings.Builder) {
 	if c.errLine != "" {
-		b.WriteString(errText.Render("  "+c.errLine) + "\n")
+		b.WriteString(wrapIndent(errText, c.errLine, c.width) + "\n")
 	}
+}
+
+func wrapIndent(style lipgloss.Style, text string, width int) string {
+	if width < 20 {
+		width = 80
+	}
+	return style.PaddingLeft(2).Width(width - 1).Render(text)
 }

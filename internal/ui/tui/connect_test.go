@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"gitlab.com/aperta/aperta/internal/config"
 	"gitlab.com/aperta/aperta/internal/core"
@@ -35,8 +37,36 @@ func fakeOpenRouter(t *testing.T) *httptest.Server {
 	return srv
 }
 
+func TestConnectShowsRetryNote(t *testing.T) {
+	d := newDriver(t, &core.Agent{Provider: &named{name: "anthropic"}, Model: "m"}, &fakeModels{})
+	spec, _ := catalog.Lookup("openrouter")
+	d.m.conn = &connector{step: connBusy, cur: catalog.Status{Spec: spec}, busy: "checking the key with openrouter...", input: newField("key: ", "paste your key", true)}
+	d.send(tea.WindowSizeMsg{Width: 40, Height: 30})
+	d.send(connectNoteMsg{name: "openrouter", note: catalog.RetryNote})
+	d.expect("retry note", "checking the key with openrouter...", "checking again, new keys can take a", "moment...", "esc = cancel")
+	narrow := func(width int) {
+		t.Helper()
+		for _, line := range strings.Split(d.view(), "\n") {
+			if w := lipgloss.Width(line); w > width {
+				t.Errorf("line is %d columns wide at %d: %q", w, width, line)
+			}
+		}
+	}
+	narrow(40)
+	d.send(connectResultMsg{name: "openrouter", err: errors.New("openrouter.ai rejected the key (401). Check that you copied the whole key; if you just created it, wait a minute and try again")})
+	d.send(tea.WindowSizeMsg{Width: 60, Height: 30})
+	d.expect("final", "rejected the key (401)", "minute and try again", "Get a key at openrouter.ai/keys")
+	narrow(60)
+	if strings.Contains(d.view(), "checking again") {
+		t.Error("the retry note stayed after the result")
+	}
+}
+
 func connectSetup(t *testing.T, withProvider bool) (*tea.Program, *core.Agent, *screen, *fakeModels, string) {
 	t.Helper()
+	old := catalog.RetryDelays
+	catalog.RetryDelays = []time.Duration{10 * time.Millisecond, 10 * time.Millisecond}
+	t.Cleanup(func() { catalog.RetryDelays = old })
 	for _, k := range []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "APERTA_BASE_URL", "APERTA_API_KEY", "OPENROUTER_BASE_URL"} {
 		t.Setenv(k, "")
 	}

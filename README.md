@@ -10,6 +10,13 @@ Needs Go 1.27 or later.
 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o aperta ./cmd/aperta
 ```
 
+Checks:
+
+```sh
+make test     # go vet and go test -race
+make smoke    # the real binary in a real terminal, against real providers (needs an OpenRouter key)
+```
+
 ## Use
 
 ```sh

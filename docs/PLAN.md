@@ -21,6 +21,13 @@ Aperta is small and very polished, not feature-rich. A change is done only when 
 4. **No regressions**: `go vet`, `go test -race`, and a quick manual pass through `/connect`, `/model`, a file edit with a permission prompt, and `aperta -c`.
 5. **Honest report**: say what was checked for real and what wasn't. Never claim untested behaviour.
 
+### Workflow for every change
+
+1. `make test`: `go vet` and `go test -race`.
+2. `make smoke`: the real binary in a real pseudo-terminal against real providers (see below). Every flow must PASS; SKIP only when no key exists.
+3. Review: dispatch the `aperta-reviewer` agent on the uncommitted diff with the base commit. A FAIL, or a PASS with any remark, is fixed and reviewed again until it is a clean PASS.
+4. Report: the `make test` result, each `make smoke` flow, the reviewer's verdict, and what was not checked. Commits are the user's.
+
 ## Feature freeze
 
 No new features (compaction, skills, hooks) until the polish pass is finished.
