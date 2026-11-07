@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -52,13 +53,61 @@ func TestParseOpenRouterKeepsOnlyToolModels(t *testing.T) {
 	}
 }
 
-func TestParseOpenAIKeepsChatModelsNewestFirst(t *testing.T) {
+func TestTidyOpenAI(t *testing.T) {
 	list, err := ParseOpenAI(fixture(t, "openai.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := ids(list), "gpt-6-luna gpt-6-sol o4-mini"; got != want {
-		t.Fatalf("ids = %s, want %s", got, want)
+	tidy := Tidy("openai", list)
+	if got, want := ids(Visible(tidy)), "gpt-6-luna gpt-6-sol o4-mini gpt-4-0613"; got != want {
+		t.Fatalf("visible = %s, want %s", got, want)
+	}
+	if len(tidy) != len(list) {
+		t.Errorf("Tidy dropped models: %d of %d", len(tidy), len(list))
+	}
+	for _, m := range tidy {
+		if m.ID == "gpt-6-sol-2026-08-07" && !m.Hidden {
+			t.Error("dated snapshot with a base id is shown")
+		}
+	}
+}
+
+func TestTidyAnthropic(t *testing.T) {
+	list, _, _, err := ParseAnthropic(fixture(t, "anthropic-full.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tidy := Tidy("anthropic", list)
+	want := "claude-haiku-5-5 claude-sonnet-5-5 claude-opus-5-5 claude-fable-5-1 claude-opus-5 claude-sonnet-5 claude-fable-5 claude-haiku-4-5"
+	if got := ids(Visible(tidy)); got != want {
+		t.Fatalf("visible =\n %s\nwant\n %s", got, want)
+	}
+	hidden := map[string]bool{}
+	for _, m := range tidy {
+		hidden[m.ID] = m.Hidden
+	}
+	for _, id := range []string{"claude-haiku-4-5-20251001", "claude-opus-4-8", "claude-sonnet-4-6", "claude-opus-4-5-20251101", "claude-sonnet-4-5-20250929"} {
+		if !hidden[id] {
+			t.Errorf("%s should be hidden", id)
+		}
+	}
+	first := Visible(tidy)[0]
+	if first.Label != "Claude Haiku 5.5" || first.Detail != "claude-haiku-5-5 · 1M context" {
+		t.Errorf("row = %q / %q", first.Label, first.Detail)
+	}
+}
+
+func TestStripDateAndClaudeVersion(t *testing.T) {
+	for in, want := range map[string]string{"gpt-6-sol-2026-08-07": "gpt-6-sol", "claude-sonnet-4-5-20250929": "claude-sonnet-4-5", "gpt-4-0613": "gpt-4", "claude-opus-5-5": "", "o4-mini": ""} {
+		if got, _ := stripDate(in); got != want {
+			t.Errorf("stripDate(%s) = %q, want %q", in, got, want)
+		}
+	}
+	for in, want := range map[string]string{"claude-opus-5-5": "opus 5.5", "claude-3-5-sonnet-20241022": "sonnet 3.5", "claude-fable-5": "fable 5", "claude-haiku-4-5-20251001": "haiku 4.5"} {
+		line, gen, ok := claudeVersion(in)
+		if got := fmt.Sprintf("%s %g", line, gen); !ok || got != want {
+			t.Errorf("claudeVersion(%s) = %q %v, want %q", in, got, ok, want)
+		}
 	}
 }
 
@@ -95,7 +144,7 @@ func TestFetchAnthropicFollowsPages(t *testing.T) {
 	if ids(list) != "claude-opus-5-5 claude-sonnet-5-5 claude-haiku-5-5" || len(calls) != 2 {
 		t.Fatalf("ids = %s, calls = %v", ids(list), calls)
 	}
-	if list[2].Detail != "Claude Haiku 5.5 · 200k context" {
+	if list[2].Detail != "claude-haiku-5-5 · 200k context" || list[2].Label != "Claude Haiku 5.5" {
 		t.Errorf("detail = %q", list[2].Detail)
 	}
 }

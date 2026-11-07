@@ -11,6 +11,20 @@ Aperta must never feel overwhelming. That was Prism's biggest problem. Every UI 
 - **A quiet status line**: model, session and tokens in one dim line. No progress spam.
 - **Safe defaults**: nothing destructive happens on Enter or by accident.
 
+## Definition of done
+
+Aperta is small and very polished, not feature-rich. A change is done only when all of this holds, and it is reported only then:
+
+1. **Real use**: it runs in a real terminal with a real provider key; a real message is sent and a real reply comes back. Fake-server tests alone are never enough.
+2. **Unhappy paths**: no network, a bad or expired key, rate limits (429), overloaded errors (529), Ctrl+C mid-stream and mid-tool-call, a terminal 60 columns wide, very long output, and an empty project folder. Each ends in a calm, plain message: never a stack trace, a hang or raw JSON.
+3. **Words**: every string on screen is short, plain, and says what to do next.
+4. **No regressions**: `go vet`, `go test -race`, and a quick manual pass through `/connect`, `/model`, a file edit with a permission prompt, and `aperta -c`.
+5. **Honest report**: say what was checked for real and what wasn't. Never claim untested behaviour.
+
+## Feature freeze
+
+No new features (compaction, skills, hooks) until the polish pass is finished.
+
 ## Name
 
 - Product: Aperta. Package and CLI: `aperta`.

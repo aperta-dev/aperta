@@ -73,6 +73,7 @@ type model struct {
 	status   string
 	ask      *askMsg
 	pick     *picker
+	loads    int
 	conn     *connector
 	pending  *pendingModel
 	total    provider.Usage

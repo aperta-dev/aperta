@@ -27,10 +27,12 @@ const (
 type Model struct {
 	ID      string `json:"id"`
 	Name    string `json:"name,omitempty"`
+	Label   string `json:"label,omitempty"`
 	Detail  string `json:"detail,omitempty"`
 	Free    bool   `json:"free,omitempty"`
 	Context int    `json:"context,omitempty"`
-	created int64
+	Created int64  `json:"created,omitempty"`
+	Hidden  bool   `json:"-"`
 }
 
 type modelCache struct {
@@ -49,19 +51,19 @@ func (c *Connections) Models(ctx context.Context, name string) ([]Model, string)
 	}
 	if list, ok := c.mem[name]; ok {
 		c.mu.Unlock()
-		return list, ""
+		return Tidy(name, list), ""
 	}
 	c.mu.Unlock()
 	if cached, ok := c.readCache(name); ok && time.Since(cached.FetchedAt) < CacheTTL {
 		c.remember(name, cached.Models)
-		return cached.Models, ""
+		return Tidy(name, cached.Models), ""
 	}
 	key, _ := s.Key(c.store())
 	list, err := FetchModels(ctx, s, s.Base(c.Overrides[name], c.store()), key)
 	if err == nil && len(list) > 0 {
 		c.remember(name, list)
 		c.writeCache(name, list)
-		return list, ""
+		return Tidy(name, list), ""
 	}
 	why := "the list was empty"
 	if err != nil {
@@ -71,7 +73,7 @@ func (c *Connections) Models(ctx context.Context, name string) ([]Model, string)
 		}
 	}
 	if cached, ok := c.readCache(name); ok && len(cached.Models) > 0 {
-		return cached.Models, fmt.Sprintf("couldn't load %s models (%s); showing the list from %s", name, why, age(cached.FetchedAt))
+		return Tidy(name, cached.Models), fmt.Sprintf("couldn't load %s models (%s); showing the list from %s", name, why, age(cached.FetchedAt))
 	}
 	var fallback []Model
 	for _, id := range append(append([]string{}, s.Models...), s.DefaultModel, s.Example) {
@@ -226,6 +228,7 @@ func ParseOpenRouter(raw []byte) ([]Model, error) {
 		Data []struct {
 			ID            string   `json:"id"`
 			Name          string   `json:"name"`
+			Created       int64    `json:"created"`
 			ContextLength int      `json:"context_length"`
 			Supported     []string `json:"supported_parameters"`
 			Pricing       struct {
@@ -250,7 +253,7 @@ func ParseOpenRouter(raw []byte) ([]Model, error) {
 		}
 		in, errIn := strconv.ParseFloat(d.Pricing.Prompt, 64)
 		outp, errOut := strconv.ParseFloat(d.Pricing.Completion, 64)
-		m := Model{ID: d.ID, Name: d.Name, Context: d.ContextLength}
+		m := Model{ID: d.ID, Name: d.Name, Context: d.ContextLength, Created: d.Created}
 		var price string
 		switch {
 		case errIn != nil || errOut != nil || in < 0 || outp < 0:
@@ -271,14 +274,7 @@ func ParseOpenAI(raw []byte) ([]Model, error) {
 	if err != nil {
 		return nil, err
 	}
-	var out []Model
-	for _, m := range list {
-		if chatModel(m.ID) {
-			out = append(out, m)
-		}
-	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].created > out[j].created })
-	return out, nil
+	return list, nil
 }
 
 func chatModel(id string) bool {
@@ -288,7 +284,7 @@ func chatModel(id string) bool {
 	if !chat {
 		return false
 	}
-	for _, bad := range []string{"embedding", "tts", "whisper", "transcribe", "realtime", "audio", "image", "dall-e", "moderation", "search", "instruct", "sora"} {
+	for _, bad := range []string{"embedding", "tts", "whisper", "transcribe", "realtime", "audio", "image", "dall-e", "moderation", "search", "instruct", "sora", "computer-use"} {
 		if strings.Contains(id, bad) {
 			return false
 		}
@@ -313,7 +309,7 @@ func parseIDs(raw []byte) ([]Model, error) {
 	var out []Model
 	for _, d := range body.Data {
 		if d.ID != "" {
-			out = append(out, Model{ID: d.ID, created: d.Created})
+			out = append(out, Model{ID: d.ID, Created: d.Created})
 		}
 	}
 	return out, nil
@@ -322,9 +318,10 @@ func parseIDs(raw []byte) ([]Model, error) {
 func ParseAnthropic(raw []byte) ([]Model, bool, string, error) {
 	var body struct {
 		Data []struct {
-			ID             string `json:"id"`
-			DisplayName    string `json:"display_name"`
-			MaxInputTokens int    `json:"max_input_tokens"`
+			ID             string    `json:"id"`
+			DisplayName    string    `json:"display_name"`
+			CreatedAt      time.Time `json:"created_at"`
+			MaxInputTokens int       `json:"max_input_tokens"`
 		} `json:"data"`
 		HasMore bool   `json:"has_more"`
 		LastID  string `json:"last_id"`
@@ -337,7 +334,7 @@ func ParseAnthropic(raw []byte) ([]Model, bool, string, error) {
 		if d.ID == "" {
 			continue
 		}
-		out = append(out, Model{ID: d.ID, Name: d.DisplayName, Context: d.MaxInputTokens, Detail: joinDetail(d.DisplayName, contextText(d.MaxInputTokens))})
+		out = append(out, Model{ID: d.ID, Name: d.DisplayName, Label: d.DisplayName, Context: d.MaxInputTokens, Created: d.CreatedAt.Unix(), Detail: joinDetail(d.ID, contextText(d.MaxInputTokens))})
 	}
 	return out, body.HasMore, body.LastID, nil
 }
@@ -374,6 +371,122 @@ func contextText(n int) string {
 	return fmt.Sprintf("%d context", n)
 }
 
+func Tidy(provider string, list []Model) []Model {
+	out := append([]Model(nil), list...)
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Created > out[j].Created })
+	ids := map[string]bool{}
+	for _, m := range out {
+		ids[m.ID] = true
+	}
+	switch provider {
+	case "anthropic":
+		lines := map[string][]float64{}
+		for _, m := range out {
+			if line, gen, ok := claudeVersion(m.ID); ok && !containsFloat(lines[line], gen) {
+				lines[line] = append(lines[line], gen)
+			}
+		}
+		for line := range lines {
+			sort.Sort(sort.Reverse(sort.Float64Slice(lines[line])))
+		}
+		for i, m := range out {
+			if base, ok := stripDate(m.ID); ok && ids[base] {
+				out[i].Hidden = true
+				continue
+			}
+			if line, gen, ok := claudeVersion(m.ID); ok {
+				gens := lines[line]
+				keep := gen == gens[0] || len(gens) > 1 && gen == gens[1]
+				out[i].Hidden = !keep
+			}
+		}
+	case "openai":
+		for i, m := range out {
+			if !chatModel(m.ID) {
+				out[i].Hidden = true
+			} else if base, ok := stripDate(m.ID); ok && ids[base] {
+				out[i].Hidden = true
+			}
+		}
+	}
+	return out
+}
+
+func containsFloat(list []float64, v float64) bool {
+	for _, x := range list {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
+
+func stripDate(id string) (string, bool) {
+	parts := strings.Split(id, "-")
+	n := len(parts)
+	digits := func(s string, l int) bool {
+		if len(s) != l {
+			return false
+		}
+		for _, c := range s {
+			if c < '0' || c > '9' {
+				return false
+			}
+		}
+		return true
+	}
+	switch {
+	case n > 3 && digits(parts[n-3], 4) && digits(parts[n-2], 2) && digits(parts[n-1], 2):
+		return strings.Join(parts[:n-3], "-"), true
+	case n > 1 && digits(parts[n-1], 8):
+		return strings.Join(parts[:n-1], "-"), true
+	case n > 1 && digits(parts[n-1], 4):
+		return strings.Join(parts[:n-1], "-"), true
+	}
+	return "", false
+}
+
+func claudeVersion(id string) (line string, gen float64, ok bool) {
+	if base, dated := stripDate(id); dated {
+		id = base
+	}
+	parts := strings.Split(id, "-")
+	if len(parts) < 3 || parts[0] != "claude" {
+		return "", 0, false
+	}
+	var nums []string
+	var words []string
+	for _, p := range parts[1:] {
+		if _, err := strconv.Atoi(p); err == nil && len(p) <= 2 {
+			nums = append(nums, p)
+		} else {
+			words = append(words, p)
+		}
+	}
+	if len(nums) == 0 || len(nums) > 2 || len(words) == 0 {
+		return "", 0, false
+	}
+	v := nums[0]
+	if len(nums) == 2 {
+		v += "." + nums[1]
+	}
+	g, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return "", 0, false
+	}
+	return strings.Join(words, "-"), g, true
+}
+
+func Visible(list []Model) []Model {
+	var out []Model
+	for _, m := range list {
+		if !m.Hidden {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
 func Filter(list []Model, query string) []Model {
 	q := strings.ToLower(strings.TrimSpace(query))
 	if q == "" {
@@ -385,7 +498,7 @@ func Filter(list []Model, query string) []Model {
 	}
 	var hits []hit
 	for _, m := range list {
-		id, name := strings.ToLower(m.ID), strings.ToLower(m.Name)
+		id, name := strings.ToLower(m.ID), strings.ToLower(m.Name+" "+m.Label)
 		score := -1
 		switch {
 		case strings.HasPrefix(id, q) || strings.Contains(id, "/"+q):

@@ -23,6 +23,7 @@ const (
 type (
 	provsMsg  []catalog.Status
 	modelsMsg struct {
+		seq      int
 		provider string
 		list     []catalog.Model
 		note     string
@@ -42,6 +43,8 @@ type picker struct {
 	filter   string
 	top      int
 	note     string
+	all      bool
+	seq      int
 }
 
 type pendingModel struct {
@@ -83,11 +86,12 @@ func (m *model) openPicker(only string) (tea.Model, tea.Cmd) {
 
 func (m *model) loadModels(name string) tea.Cmd {
 	p := m.pick
-	p.stage, p.provider, p.loading, p.filter, p.sel, p.top, p.note = stageModels, name, true, "", 0, 0, ""
-	models := m.opts.Models
+	m.loads++
+	p.stage, p.provider, p.loading, p.filter, p.sel, p.top, p.note, p.seq = stageModels, name, true, "", 0, 0, "", m.loads
+	models, seq := m.opts.Models, m.loads
 	return func() tea.Msg {
 		list, note := models.Models(context.Background(), name)
-		return modelsMsg{provider: name, list: list, note: note}
+		return modelsMsg{seq: seq, provider: name, list: list, note: note}
 	}
 }
 
@@ -123,7 +127,7 @@ func (m *model) pickMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case modelsMsg:
-		if p.stage != stageModels || msg.provider != p.provider {
+		if p.stage != stageModels || msg.seq != p.seq {
 			return m, nil
 		}
 		p.loading, p.note = false, msg.note
@@ -145,6 +149,7 @@ func (m *model) decorate(name string, list []catalog.Model) []catalog.Model {
 			}
 		}
 		top.Detail = joinNote("current", top.Detail)
+		top.Hidden = false
 		out = append(out, top)
 	}
 	for _, x := range list {
@@ -166,8 +171,28 @@ func joinNote(a, b string) string {
 	return a + " · " + b
 }
 
+func (p *picker) hiddenCount() int {
+	n := 0
+	for _, x := range p.models {
+		if x.Hidden {
+			n++
+		}
+	}
+	return n
+}
+
 func (p *picker) refilter() {
-	p.shown = catalog.Filter(p.models, p.filter)
+	base := p.models
+	if !p.all {
+		base = catalog.Visible(p.models)
+		q := strings.ToLower(strings.TrimSpace(p.filter))
+		for _, x := range p.models {
+			if x.Hidden && q != "" && strings.ToLower(x.ID) == q {
+				base = append([]catalog.Model{x}, base...)
+			}
+		}
+	}
+	p.shown = catalog.Filter(base, p.filter)
 	p.sel, p.top = 0, 0
 }
 
@@ -190,7 +215,7 @@ func (p *picker) move(d int) {
 
 func (m *model) pickPaste(text string) (tea.Model, tea.Cmd) {
 	if p := m.pick; p.stage == stageModels && !p.loading {
-		p.filter += catalog.CleanKey(text)
+		p.filter += filterText(text)
 		p.refilter()
 	}
 	return m, nil
@@ -259,6 +284,12 @@ func (m *model) pickKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		p.filter = ""
 		p.refilter()
 		return m, nil
+	case "ctrl+a":
+		if !p.loading && (p.all || p.hiddenCount() > 0) {
+			p.all = !p.all
+			p.refilter()
+		}
+		return m, nil
 	case "enter":
 		if p.loading {
 			return m, nil
@@ -274,7 +305,7 @@ func (m *model) pickKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	key := msg.Key()
 	if key.Mod&^(tea.ModShift|tea.ModCapsLock|tea.ModNumLock) == 0 && !p.loading {
-		if t := catalog.CleanKey(key.Text); t != "" {
+		if t := filterText(key.Text); t != "" {
 			p.filter += t
 			p.refilter()
 		}
@@ -340,9 +371,20 @@ func (p *picker) view(cur catalog.Choice) string {
 		b.WriteString(dim.Render("  loading "+p.provider+" models...") + "\n" + dim.Render("esc to cancel") + "\n")
 		return b.String()
 	}
-	count := fmt.Sprintf("  %d models", len(p.models))
+	total := len(p.models)
+	hidden := p.hiddenCount()
+	if !p.all {
+		total -= hidden
+	}
+	count := fmt.Sprintf("  %d models", total)
 	if p.filter != "" {
-		count = fmt.Sprintf("  %d of %d", len(p.shown), len(p.models))
+		count = fmt.Sprintf("  %d of %d", len(p.shown), total)
+	}
+	switch {
+	case p.all && hidden > 0:
+		count += " · all shown"
+	case hidden > 0:
+		count += fmt.Sprintf(" · %d older hidden", hidden)
 	}
 	filter := dim.Render("filter: ")
 	if p.filter == "" {
@@ -361,7 +403,11 @@ func (p *picker) view(cur catalog.Choice) string {
 		if i == p.sel {
 			mark = accent.Render("> ")
 		}
-		line := mark + x.ID
+		label := x.ID
+		if x.Label != "" {
+			label = x.Label
+		}
+		line := mark + label
 		if x.Detail != "" {
 			detail := dim.Render("  " + x.Detail)
 			if x.Free {
@@ -387,6 +433,23 @@ func (p *picker) view(cur catalog.Choice) string {
 	if p.single {
 		back = "esc cancel"
 	}
-	b.WriteString(warn.Render("type to filter · ↑↓ move · enter pick") + dim.Render(" · "+back) + "\n")
+	toggle := ""
+	switch {
+	case p.all && hidden > 0:
+		toggle = " · ctrl+a hide older"
+	case hidden > 0:
+		toggle = " · ctrl+a show all"
+	}
+	b.WriteString(warn.Render("type to filter · ↑↓ move · enter pick") + dim.Render(toggle+" · "+back) + "\n")
+	return b.String()
+}
+
+func filterText(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r >= ' ' && r < 0x7f {
+			b.WriteRune(r)
+		}
+	}
 	return b.String()
 }

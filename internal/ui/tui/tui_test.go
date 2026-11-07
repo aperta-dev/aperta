@@ -388,95 +388,6 @@ func keys(p *tea.Program, k string) {
 	}
 }
 
-func TestModelPickerKeysAndEsc(t *testing.T) {
-	models := pickerModels()
-	p, _, out := startModelUI(t, models)
-	m := func() string { return out.text() }
-	typeLine(p, "/model")
-	waitFor(t, "provider list", func() bool { return strings.Contains(m(), "press 1-2 or ↑↓ and enter") })
-	for _, want := range []string{"1 anthropic  current: claude-sonnet-5-5", "2 ollama", "not connected: openai, openrouter, lmstudio, openai-compatible · /connect to add", "esc = cancel"} {
-		if !strings.Contains(m(), want) {
-			t.Errorf("picker is missing %q:\n%s", want, m())
-		}
-	}
-	keys(p, "esc")
-	time.Sleep(100 * time.Millisecond)
-	if len(models.last()) != 0 {
-		t.Fatal("esc switched the model")
-	}
-	typeLine(p, "/model")
-	waitFor(t, "provider list again", func() bool { return strings.Count(m(), "Switch model") >= 2 })
-	keys(p, "2")
-	waitFor(t, "ollama models", func() bool {
-		return strings.Contains(m(), "Pick a model from ollama") && strings.Contains(m(), "2 models")
-	})
-	if !strings.Contains(m(), "type to filter · ↑↓ move · enter pick · esc back") {
-		t.Errorf("hints missing:\n%s", m())
-	}
-	keys(p, "down")
-	keys(p, "enter")
-	waitFor(t, "arrow pick", func() bool { return strings.Contains(m(), "model: ollama/llama4") })
-
-	typeLine(p, "/model")
-	waitFor(t, "third open", func() bool { return strings.Count(m(), "Switch model") >= 3 })
-	keys(p, "enter")
-	waitFor(t, "ollama again", func() bool { return strings.Contains(m(), "llama4  current") })
-	keys(p, "esc")
-	waitFor(t, "back to providers", func() bool { return strings.Count(m(), "Switch model") >= 4 })
-	keys(p, "1")
-	waitFor(t, "anthropic models", func() bool { return strings.Contains(m(), "Pick a model from anthropic") })
-	keys(p, "opu")
-	waitFor(t, "filtered", func() bool { return strings.Contains(m(), "filter: opu") && strings.Contains(m(), "1 of 3") })
-	keys(p, "enter")
-	waitFor(t, "filter pick", func() bool { return strings.Contains(m(), "model: anthropic/claude-opus-5-5") })
-
-	typeLine(p, "/model anthropic")
-	waitFor(t, "direct list", func() bool { return strings.Contains(m(), "esc cancel") })
-	keys(p, "zzzx")
-	keys(p, "backspace")
-	waitFor(t, "no match", func() bool { return strings.Contains(m(), "no match · enter uses \"zzz\" as the model id") })
-	keys(p, "enter")
-	waitFor(t, "typed id", func() bool { return strings.Contains(m(), "model: anthropic/zzz") })
-	got := models.last()
-	if len(got) != 3 || got[0].Model != "llama4" || got[1].Model != "claude-opus-5-5" || got[2].Model != "zzz" {
-		t.Errorf("switched %v", got)
-	}
-}
-
-func TestModelPickerScrollsAndMarksFree(t *testing.T) {
-	var list []catalog.Model
-	for i := 0; i < 30; i++ {
-		m := catalog.Model{ID: fmt.Sprintf("vendor/model-%02d", i), Detail: "$1.00/$2.00 per 1M · 128k context"}
-		if i == 0 {
-			m.Free, m.Detail = true, "free · 32k context"
-		}
-		list = append(list, m)
-	}
-	models := &fakeModels{connected: []string{"openrouter"}, models: map[string][]catalog.Model{"openrouter": list}, note: "couldn't load openrouter models (could not reach openrouter.ai); showing the list from 3 hours ago"}
-	p, _, out := startModelUI(t, models)
-	typeLine(p, "/model")
-	waitFor(t, "single provider opens its list", func() bool {
-		return strings.Contains(out.text(), "Pick a model from openrouter") && strings.Contains(out.text(), "30 models")
-	})
-	view := out.text()
-	for _, want := range []string{"vendor/model-00  free · 32k context", "vendor/model-09  $1.00/$2.00 per 1M · 128k context", "↓ 20 more", "showing the list from 3 hours ago"} {
-		if !strings.Contains(view, want) {
-			t.Errorf("missing %q:\n%s", want, view)
-		}
-	}
-	if strings.Contains(view, "vendor/model-10") {
-		t.Error("more than 10 rows shown")
-	}
-	for i := 0; i < 12; i++ {
-		keys(p, "down")
-	}
-	waitFor(t, "scrolled", func() bool {
-		return strings.Contains(out.text(), "↑ 3 more") && strings.Contains(out.text(), "↓ 17 more")
-	})
-	keys(p, "enter")
-	waitFor(t, "picked", func() bool { return strings.Contains(out.text(), "model: openrouter/vendor/model-12") })
-}
-
 func TestModelSwitchDuringTurnWaitsForNextTurn(t *testing.T) {
 	models := &fakeModels{}
 	agent := &core.Agent{Provider: &named{name: "anthropic"}, Model: "claude-sonnet-5-5", Tools: tool.Defaults(), Dir: t.TempDir()}
@@ -517,5 +428,205 @@ func TestStartWithoutModelOpensPicker(t *testing.T) {
 	waitFor(t, "picked", func() bool { return strings.Contains(out.text(), "model: openrouter/vendor/free-one:free") })
 	if len(agent.Messages) != 0 {
 		t.Error("a message was sent without a model")
+	}
+}
+
+func TestModelPickerIgnoresAnEarlierLoad(t *testing.T) {
+	m := newModel(Options{Agent: &core.Agent{Provider: &named{name: "anthropic"}, Model: "a"}, Models: &fakeModels{}})
+	m.openPicker("anthropic")
+	first := m.pick.seq
+	m.pick = nil
+	m.openPicker("anthropic")
+	m.Update(modelsMsg{seq: first, provider: "anthropic", list: []catalog.Model{{ID: "stale"}}})
+	if !m.pick.loading {
+		t.Fatal("a load from a closed picker filled the new one")
+	}
+	m.Update(modelsMsg{seq: m.pick.seq, provider: "anthropic", list: []catalog.Model{{ID: "fresh"}}})
+	if m.pick.loading || len(m.pick.shown) != 2 || m.pick.shown[1].ID != "fresh" {
+		t.Fatalf("current load not applied: %+v", m.pick.shown)
+	}
+
+	m.pick = nil
+	m.openPicker("")
+	m.Update(provsMsg{{Spec: catalog.Spec{Name: "anthropic"}, Connected: true}, {Spec: catalog.Spec{Name: "ollama"}, Connected: true}})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	inFlight := m.pick.seq
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	m.Update(modelsMsg{seq: inFlight, provider: "anthropic", list: []catalog.Model{{ID: "stale"}}})
+	if m.pick.stage != stageProviders {
+		t.Fatal("a load that landed after esc-back left the provider list")
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.pick.seq == inFlight {
+		t.Fatal("reopening the same provider reused the old load number")
+	}
+	m.Update(modelsMsg{seq: inFlight, provider: "anthropic", list: []catalog.Model{{ID: "stale"}}})
+	if !m.pick.loading {
+		t.Fatal("the old load filled the reopened list")
+	}
+}
+
+type driver struct {
+	t *testing.T
+	m *model
+}
+
+func newDriver(t *testing.T, agent *core.Agent, models ModelSwitcher) *driver {
+	m := newModel(Options{Agent: agent, Version: "test", Models: models})
+	m.Update(tea.WindowSizeMsg{Width: 110, Height: 30})
+	return &driver{t: t, m: m}
+}
+
+func (d *driver) send(msg tea.Msg) {
+	_, cmd := d.m.Update(msg)
+	d.run(cmd)
+}
+
+func (d *driver) run(cmd tea.Cmd) {
+	if cmd == nil {
+		return
+	}
+	out := make(chan tea.Msg, 1)
+	go func() { out <- cmd() }()
+	select {
+	case msg := <-out:
+		switch v := msg.(type) {
+		case tea.BatchMsg:
+			for _, c := range v {
+				d.run(c)
+			}
+		case provsMsg, modelsMsg, statusesMsg:
+			d.send(v)
+		}
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+func (d *driver) line(text string) {
+	d.m.input.SetValue(text)
+	d.send(tea.KeyPressMsg{Code: tea.KeyEnter})
+}
+
+func (d *driver) keys(k string) {
+	switch k {
+	case "enter":
+		d.send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	case "esc":
+		d.send(tea.KeyPressMsg{Code: tea.KeyEscape})
+	case "down":
+		d.send(tea.KeyPressMsg{Code: tea.KeyDown})
+	case "backspace":
+		d.send(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	case "ctrl+a":
+		d.send(tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl})
+	case "ctrl+u":
+		d.send(tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
+	default:
+		for _, r := range k {
+			d.send(tea.KeyPressMsg{Code: r, Text: string(r)})
+		}
+	}
+}
+
+func (d *driver) view() string { return ansi.ReplaceAllString(d.m.View().Content, "") }
+
+func (d *driver) expect(what string, wants ...string) {
+	d.t.Helper()
+	v := d.view()
+	for _, w := range wants {
+		if !strings.Contains(v, w) {
+			d.t.Errorf("%s: missing %q in\n%s", what, w, v)
+		}
+	}
+}
+
+func TestModelPickerKeysAndEsc(t *testing.T) {
+	models := pickerModels()
+	d := newDriver(t, &core.Agent{Provider: &named{name: "anthropic"}, Model: "claude-sonnet-5-5"}, models)
+	d.line("/model")
+	d.expect("provider list", "1 anthropic  current: claude-sonnet-5-5", "2 ollama", "not connected: openai, openrouter, lmstudio, openai-compatible · /connect to add", "press 1-2 or ↑↓ and enter", "esc = cancel")
+	d.keys("esc")
+	if d.m.pick != nil || len(models.last()) != 0 {
+		t.Fatal("esc did not close without switching")
+	}
+	d.line("/model")
+	d.keys("2")
+	d.expect("ollama list", "Pick a model from ollama", "2 models", "> qwen3-coder", "llama4", "type to filter · ↑↓ move · enter pick · esc back")
+	d.keys("down")
+	d.keys("enter")
+	d.line("/model")
+	d.keys("enter")
+	d.expect("current first", "> llama4  current")
+	d.keys("esc")
+	d.expect("back to providers", "Switch model", "press 1-2")
+	d.keys("1")
+	d.keys("opu")
+	d.expect("filtered", "filter: opu", "1 of 3", "> claude-opus-5-5")
+	d.keys("enter")
+	d.line("/model anthropic")
+	d.expect("direct list", "esc cancel")
+	d.keys("zzzx")
+	d.keys("backspace")
+	d.expect("no match", "no match · enter uses \"zzz\" as the model id")
+	d.keys("enter")
+	got := models.last()
+	if len(got) != 3 || got[0] != (catalog.Choice{Provider: "ollama", Model: "llama4"}) || got[1].Model != "claude-opus-5-5" || got[2].Model != "zzz" {
+		t.Errorf("switched %v", got)
+	}
+}
+
+func TestModelPickerScrollsAndMarksFree(t *testing.T) {
+	var list []catalog.Model
+	for i := 0; i < 30; i++ {
+		m := catalog.Model{ID: fmt.Sprintf("vendor/model-%02d", i), Detail: "$1.00/$2.00 per 1M · 128k context"}
+		if i == 0 {
+			m.Free, m.Detail = true, "free · 32k context"
+		}
+		list = append(list, m)
+	}
+	models := &fakeModels{connected: []string{"openrouter"}, models: map[string][]catalog.Model{"openrouter": list}, note: "couldn't load openrouter models (could not reach openrouter.ai); showing the list from 3 hours ago"}
+	d := newDriver(t, &core.Agent{Provider: &named{name: "anthropic"}, Model: "x"}, models)
+	d.line("/model")
+	d.expect("single provider opens its list", "Pick a model from openrouter", "30 models", "vendor/model-00  free · 32k context", "vendor/model-09  $1.00/$2.00 per 1M · 128k context", "↓ 20 more", "showing the list from 3 hours ago")
+	if strings.Contains(d.view(), "vendor/model-10") {
+		t.Error("more than 10 rows shown")
+	}
+	for i := 0; i < 12; i++ {
+		d.keys("down")
+	}
+	d.expect("scrolled", "↑ 3 more", "↓ 17 more", "> vendor/model-12")
+	d.keys("enter")
+	if got := models.last(); len(got) != 1 || got[0].Model != "vendor/model-12" {
+		t.Errorf("switched %v", got)
+	}
+}
+
+func TestModelPickerHidesOlderUntilCtrlA(t *testing.T) {
+	list := catalog.Tidy("anthropic", []catalog.Model{
+		{ID: "claude-opus-5-5", Label: "Claude Opus 5.5", Detail: "claude-opus-5-5 · 1M context", Created: 30},
+		{ID: "claude-opus-5", Label: "Claude Opus 5", Detail: "claude-opus-5 · 1M context", Created: 20},
+		{ID: "claude-opus-4-8", Label: "Claude Opus 4.8", Detail: "claude-opus-4-8 · 1M context", Created: 10},
+		{ID: "claude-sonnet-4-5-20250929", Label: "Claude Sonnet 4.5", Created: 5},
+		{ID: "claude-sonnet-4-5", Label: "Claude Sonnet 4.5", Created: 5},
+	})
+	models := &fakeModels{connected: []string{"anthropic"}, models: map[string][]catalog.Model{"anthropic": list}}
+	d := newDriver(t, &core.Agent{Provider: &named{name: "anthropic"}, Model: "claude-opus-5"}, models)
+	d.line("/model")
+	d.expect("clean list", "3 models · 2 older hidden", "> Claude Opus 5  current · claude-opus-5 · 1M context", "Claude Opus 5.5  claude-opus-5-5 · 1M context", "Claude Sonnet 4.5", "ctrl+a show all")
+	if strings.Contains(d.view(), "Claude Opus 4.8") {
+		t.Error("an older model is shown by default")
+	}
+	d.keys("ctrl+a")
+	d.expect("all", "5 models · all shown", "Claude Opus 4.8", "ctrl+a hide older")
+	d.keys("ctrl+a")
+	d.expect("hidden again", "3 models · 2 older hidden")
+	d.keys("opus 5")
+	d.expect("space in filter", "filter: opus 5▏", "2 of 3")
+	d.keys("ctrl+u")
+	d.keys("claude-opus-4-8")
+	d.expect("exact id reaches hidden", "1 of 3", "> Claude Opus 4.8")
+	d.keys("enter")
+	if got := models.last(); len(got) != 1 || got[0].Model != "claude-opus-4-8" {
+		t.Errorf("switched %v", got)
 	}
 }
