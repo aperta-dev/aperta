@@ -21,6 +21,8 @@ type keyCatcher struct {
 	keys []string
 }
 
+func (k *keyCatcher) Cached(name string) []catalog.Model { return nil }
+
 func (k *keyCatcher) Models(ctx context.Context, name string) ([]catalog.Model, string) {
 	return nil, ""
 }

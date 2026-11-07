@@ -15,6 +15,7 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	xansi "github.com/charmbracelet/x/ansi"
 
 	"gitlab.com/aperta/aperta/internal/core"
 	"gitlab.com/aperta/aperta/internal/provider"
@@ -38,6 +39,7 @@ type Options struct {
 
 type ModelSwitcher interface {
 	Models(ctx context.Context, name string) ([]catalog.Model, string)
+	Cached(name string) []catalog.Model
 	Switch(c catalog.Choice) (provider.Provider, error)
 	Statuses(ctx context.Context) []catalog.Status
 	Probe(ctx context.Context, name string) error
@@ -55,8 +57,12 @@ type (
 	liveMsg   string
 	statusMsg string
 	usageMsg  provider.Usage
-	doneMsg   struct{ err error }
-	askMsg    struct {
+	windowMsg struct {
+		key  string
+		size int
+	}
+	doneMsg struct{ err error }
+	askMsg  struct {
 		req   core.PermissionRequest
 		rule  string
 		reply chan core.Decision
@@ -79,7 +85,11 @@ type model struct {
 	loads    int
 	conn     *connector
 	pending  *pendingModel
-	total    provider.Usage
+	last     provider.Usage
+	window   int
+	winKey   string
+	warned   bool
+	greeted  bool
 	quitting bool
 }
 
@@ -119,7 +129,11 @@ func newModel(opts Options) *model {
 	in.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("shift+enter", "alt+enter", "ctrl+j"))
 	in.SetVirtualCursor(true)
 	in.Focus()
-	return &model{opts: opts, input: in, spin: spinner.New(spinner.WithSpinner(spinner.Dot)), width: 80}
+	m := &model{opts: opts, input: in, spin: spinner.New(spinner.WithSpinner(spinner.Dot)), width: 80}
+	if opts.Session != nil && len(opts.History) > 0 {
+		m.last = opts.Session.LastUsage
+	}
+	return m
 }
 
 func Run(opts Options) error {
@@ -128,24 +142,6 @@ func Run(opts Options) error {
 }
 
 func (m *model) Init() tea.Cmd {
-	go func() {
-		header := bold.Render("Aperta "+m.opts.Version) + dim.Render(" · "+m.opts.Agent.Dir+" · /help")
-		lines := append([]string{header}, renderHistory(m.opts.History)...)
-		if len(m.opts.History) > 0 {
-			lines = append(lines, dim.Render("resumed session "+m.opts.Session.ID))
-		}
-		switch {
-		case m.opts.Agent.Provider == nil:
-			lines = append(lines, warn.Render("No model provider is connected yet.")+dim.Render(" Pick one below to start."))
-		case m.opts.Agent.Model == "":
-			lines = append(lines, warn.Render("Pick a model to start."))
-		}
-		m.prog.Println(strings.Join(lines, "\n"))
-		if m.opts.Servers != nil && !m.opts.Servers.Empty() {
-			m.opts.Servers.Wait(context.Background())
-			m.prog.Println(serverStatus(m.opts.Servers.Status()))
-		}
-	}()
 	if m.opts.Models != nil {
 		switch {
 		case m.opts.Agent.Provider == nil:
@@ -160,11 +156,50 @@ func (m *model) Init() tea.Cmd {
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.update(msg)
+	if w := m.watchWindow(); w != nil {
+		cmd = tea.Batch(cmd, w)
+	}
+	return next, cmd
+}
+
+func (m *model) greet(width int) tea.Cmd {
+	header := bold.Render("Aperta "+m.opts.Version) + dim.Render(" · "+m.opts.Agent.Dir+" · /help")
+	lines := append([]string{header}, renderHistory(m.opts.History, width)...)
+	if len(m.opts.History) > 0 {
+		lines = append(lines, dim.Render("resumed session "+m.opts.Session.ID))
+	}
+	switch {
+	case m.opts.Agent.Provider == nil:
+		lines = append(lines, warn.Render("No model provider is connected yet.")+dim.Render(" Pick one below to start."))
+	case m.opts.Agent.Model == "":
+		lines = append(lines, warn.Render("Pick a model to start."))
+	}
+	cmds := []tea.Cmd{tea.Println(strings.Join(lines, "\n")), m.contextWarning()}
+	if servers := m.opts.Servers; servers != nil && !servers.Empty() {
+		cmds = append(cmds, func() tea.Msg {
+			servers.Wait(context.Background())
+			return tea.Println(serverStatus(servers.Status()))()
+		})
+	}
+	return tea.Sequence(cmds...)
+}
+
+func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case windowMsg:
+		if msg.key == m.current().String() {
+			m.window = msg.size
+		}
+		return m, m.contextWarning()
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.cols.Store(int32(msg.Width))
 		m.input.SetWidth(max(msg.Width-2, 10))
+		if !m.greeted {
+			m.greeted = true
+			return m, m.greet(msg.Width)
+		}
 		return m, nil
 	case tea.KeyPressMsg:
 		return m.key(msg)
@@ -185,8 +220,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = string(msg)
 		return m, nil
 	case usageMsg:
-		m.total.Add(provider.Usage(msg))
-		return m, nil
+		m.last = provider.Usage(msg)
+		return m, m.contextWarning()
 	case askMsg:
 		m.ask = &msg
 		return m, nil
@@ -319,7 +354,7 @@ func (m *model) submit() (tea.Model, tea.Cmd) {
 
 func (m *model) runTurn(ctx context.Context, prompt string) {
 	p := m.prog
-	p.Println(renderUser(prompt))
+	p.Println(renderUserWidth(prompt, int(m.cols.Load())))
 	s := &stream{p: p, inputs: map[string]json.RawMessage{}, cols: &m.cols}
 	err := m.opts.Agent.Run(ctx, prompt, s.handle)
 	s.flush()
@@ -327,26 +362,55 @@ func (m *model) runTurn(ctx context.Context, prompt string) {
 }
 
 type stream struct {
-	p      *tea.Program
-	live   string
-	inputs map[string]json.RawMessage
-	cols   *atomic.Int32
+	p       *tea.Program
+	live    string
+	inputs  map[string]json.RawMessage
+	cols    *atomic.Int32
+	md      markdown
+	blank   bool
+	started bool
+}
+
+func (s *stream) width() int {
+	if s.cols != nil && s.cols.Load() > 0 {
+		return int(s.cols.Load())
+	}
+	return 80
 }
 
 func (s *stream) say(text string) {
-	width := 80
-	if s.cols != nil && s.cols.Load() > 0 {
-		width = int(s.cols.Load())
+	s.blank, s.started = false, false
+	s.p.Println(wrapLines(text, max(s.width()-1, 20)))
+}
+
+func (s *stream) show(text string) {
+	s.blank, s.started = false, false
+	s.p.Println(fit(text, s.width()))
+}
+
+func (s *stream) text(lines string) {
+	for _, l := range strings.Split(lines, "\n") {
+		out := s.md.line(l, s.width())
+		if strings.TrimSpace(xansi.Strip(out)) == "" {
+			s.blank = s.started
+			continue
+		}
+		if s.blank {
+			out = "\n" + out
+		}
+		s.blank, s.started = false, true
+		s.p.Println(out)
 	}
-	s.p.Println(lipgloss.Wrap(text, max(width-1, 20), " "))
 }
 
 func (s *stream) flush() {
 	if s.live != "" {
-		s.p.Println(s.live)
+		s.text(s.live)
 		s.live = ""
 		s.p.Send(liveMsg(""))
 	}
+	s.md = markdown{}
+	s.blank, s.started = false, false
 }
 
 func (s *stream) handle(ev core.Event) {
@@ -358,7 +422,7 @@ func (s *stream) handle(ev core.Event) {
 		}
 		s.live += ev.Text
 		if i := strings.LastIndexByte(s.live, '\n'); i >= 0 {
-			s.p.Println(s.live[:i])
+			s.text(s.live[:i])
 			s.live = s.live[i+1:]
 		}
 		s.p.Send(liveMsg(s.live))
@@ -366,14 +430,14 @@ func (s *stream) handle(ev core.Event) {
 	case core.EventToolCall:
 		s.flush()
 		s.inputs[ev.ToolCall.ID] = ev.ToolCall.Input
-		s.p.Println(renderToolCall(ev.ToolCall.Name, ev.ToolCall.Input))
+		s.show(renderToolCall(ev.ToolCall.Name, ev.ToolCall.Input))
 		s.p.Send(statusMsg("running " + ev.ToolCall.Name))
 	case core.EventToolResult:
 		if out := renderToolResult(*ev.ToolResult, s.inputs[ev.ToolResult.ID]); out != "" {
 			if ev.ToolResult.Note != "" {
 				s.say(out)
 			} else {
-				s.p.Println(out)
+				s.show(out)
 			}
 		}
 		s.p.Send(statusMsg("working"))
@@ -410,18 +474,21 @@ func (m *model) View() tea.View {
 	}
 	var b strings.Builder
 	if m.live != "" {
-		b.WriteString(m.live + "\n")
+		b.WriteString(wrapLines(m.live, max(m.width-1, 20)) + "\n")
 	}
+	width := max(m.width-1, 20)
+	section := ""
 	switch {
 	case m.ask != nil:
-		b.WriteString(m.askView())
+		section = m.askView()
 	case m.conn != nil:
-		b.WriteString(m.conn.view(m.width))
+		section = m.conn.view(m.width)
 	case m.pick != nil:
-		b.WriteString(m.pick.view(m.current()))
+		section = m.pick.view(m.current())
 	case m.running:
-		b.WriteString(accent.Render(m.spin.View()) + " " + m.status + dim.Render(" · esc to stop") + "\n")
+		section = accent.Render(m.spin.View()) + " " + m.status + dim.Render(" · esc to stop") + "\n"
 	}
+	b.WriteString(wrapLines(section, width))
 	if m.ask == nil && m.pick == nil && m.conn == nil {
 		b.WriteString(m.input.View() + "\n")
 	}
@@ -436,11 +503,16 @@ func (m *model) askView() string {
 	if a.req.Tool == "edit" {
 		b.WriteString(diffPreview(a.req.Input) + "\n")
 	}
-	b.WriteString("  " + bold.Render("1") + " yes, once")
+	opts := []string{bold.Render("1") + " yes, once"}
 	if a.rule != "" {
-		b.WriteString("   " + bold.Render("2") + " yes, " + core.DescribeRule(a.rule) + " in this project")
+		opts = append(opts, bold.Render("2")+" yes, "+core.DescribeRule(a.rule)+" in this project")
 	}
-	b.WriteString("   " + bold.Render("3") + " no\n")
+	opts = append(opts, bold.Render("3")+" no")
+	row := "  " + strings.Join(opts, "   ")
+	if lipgloss.Width(row) > max(m.width-1, 20) {
+		row = "  " + strings.Join(opts, "\n  ")
+	}
+	b.WriteString(row + "\n")
 	keys := "1 or 3"
 	if a.rule != "" {
 		keys = "1, 2 or 3"
@@ -450,20 +522,72 @@ func (m *model) askView() string {
 }
 
 func (m *model) footer() string {
-	parts := []string{"no model · /connect"}
+	name := "no model · /connect"
 	if c := m.current(); c.Provider != "" && c.Model != "" {
-		parts[0] = c.String()
+		name = c.String()
 	} else if c.Provider != "" {
-		parts[0] = c.Provider + " · no model · /model"
+		name = c.Provider + " · no model · /model"
 	}
-	if m.opts.Session != nil {
-		parts = append(parts, m.opts.Session.ID)
+	width := max(m.width-1, 20)
+	ctx := m.contextText()
+	if ctx != "" {
+		if room := width - len(ctx) - 3; room >= 8 {
+			name = xansi.Truncate(name, room, "…") + " · " + ctx
+		} else {
+			name = ctx
+		}
 	}
-	t := m.total
-	if in := t.InputTokens + t.CacheReadTokens + t.CacheWriteTokens; in > 0 {
-		parts = append(parts, fmt.Sprintf("%s in, %s out", tokens(in), tokens(t.OutputTokens)))
+	line := name
+	if m.opts.Session != nil && lipgloss.Width(line)+3+len(m.opts.Session.ID) <= width {
+		line += " · " + m.opts.Session.ID
 	}
-	return strings.Join(parts, " · ")
+	return xansi.Truncate(line, width, "…")
+}
+
+func (m *model) used() int {
+	u := m.last
+	return u.InputTokens + u.CacheReadTokens + u.CacheWriteTokens + u.OutputTokens
+}
+
+func (m *model) contextText() string {
+	used := m.used()
+	switch {
+	case used == 0:
+		return ""
+	case m.window > 0 && used*100 < m.window:
+		return "<1% of context"
+	case m.window > 0:
+		return fmt.Sprintf("%d%% of context", min(100, used*100/m.window))
+	}
+	return tokens(used) + " context"
+}
+
+const contextWarnAt = 80
+
+func (m *model) contextWarning() tea.Cmd {
+	if m.warned || m.window == 0 || m.used()*100/m.window < contextWarnAt {
+		return nil
+	}
+	m.warned = true
+	return tea.Println(warn.Render(fmt.Sprintf("This conversation uses %d%% of the model's context. Start a new session soon: /exit, then aperta.", min(100, m.used()*100/m.window))))
+}
+
+func (m *model) watchWindow() tea.Cmd {
+	c := m.current()
+	key := c.String()
+	if m.opts.Models == nil || c.Provider == "" || c.Model == "" || key == m.winKey {
+		return nil
+	}
+	m.winKey, m.window, m.warned = key, 0, false
+	models := m.opts.Models
+	return func() tea.Msg {
+		for _, x := range models.Cached(c.Provider) {
+			if x.ID == c.Model {
+				return windowMsg{key: key, size: x.Context}
+			}
+		}
+		return windowMsg{key: key}
+	}
 }
 
 func tokens(n int) string {

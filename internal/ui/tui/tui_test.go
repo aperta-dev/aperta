@@ -267,6 +267,13 @@ func (f *fakeModels) Models(ctx context.Context, name string) ([]catalog.Model, 
 	return f.models[name], f.note
 }
 
+func (f *fakeModels) Cached(name string) []catalog.Model {
+	if f.models == nil && f.conns != nil {
+		return f.conns.Cached(name)
+	}
+	return f.models[name]
+}
+
 func (f *fakeModels) Statuses(ctx context.Context) []catalog.Status {
 	if f.conns != nil {
 		return f.conns.Statuses(ctx)
@@ -477,9 +484,9 @@ type driver struct {
 }
 
 func newDriver(t *testing.T, agent *core.Agent, models ModelSwitcher) *driver {
-	m := newModel(Options{Agent: agent, Version: "test", Models: models})
-	m.Update(tea.WindowSizeMsg{Width: 110, Height: 30})
-	return &driver{t: t, m: m}
+	d := &driver{t: t, m: newModel(Options{Agent: agent, Version: "test", Models: models})}
+	d.send(tea.WindowSizeMsg{Width: 110, Height: 30})
+	return d
 }
 
 func (d *driver) send(msg tea.Msg) {
@@ -500,7 +507,7 @@ func (d *driver) run(cmd tea.Cmd) {
 			for _, c := range v {
 				d.run(c)
 			}
-		case provsMsg, modelsMsg, statusesMsg:
+		case provsMsg, modelsMsg, statusesMsg, windowMsg:
 			d.send(v)
 		}
 	case <-time.After(200 * time.Millisecond):
@@ -642,9 +649,7 @@ func TestErrorEventWithoutMessageShowsTheError(t *testing.T) {
 	go p.Run()
 	t.Cleanup(p.Kill)
 	waitFor(t, "start", func() bool { return strings.Contains(out.text(), "Aperta test") })
-	var cols atomic.Int32
-	cols.Store(100)
-	s := &stream{p: p, inputs: map[string]json.RawMessage{}, cols: &cols}
+	s := &stream{p: p, inputs: map[string]json.RawMessage{}, cols: newCols(100)}
 	s.handle(core.Event{Type: core.EventError, Error: "saving session: disk full"})
 	waitFor(t, "fallback to the raw error", func() bool { return strings.Contains(out.text(), "saving session: disk full") })
 	s.handle(core.Event{Type: core.EventError, Error: "RAW-DETAIL-xyz", Message: "Plain words.", Detail: "request req_1"})
@@ -665,9 +670,7 @@ func TestNoticesWrapAtSixtyColumns(t *testing.T) {
 	go p.Run()
 	t.Cleanup(p.Kill)
 	waitFor(t, "start", func() bool { return strings.Contains(out.text(), "Aperta test") })
-	var cols atomic.Int32
-	cols.Store(60)
-	s := &stream{p: p, inputs: map[string]json.RawMessage{}, cols: &cols}
+	s := &stream{p: p, inputs: map[string]json.RawMessage{}, cols: newCols(60)}
 	s.handle(core.Event{Type: core.EventRetry, Message: "can't reach Anthropic · trying again in 2s (2 of 3)"})
 	s.handle(core.Event{Type: core.EventError, Message: "Anthropic rejected the API key. Run /connect (or aperta connect anthropic) to add a new one.", Detail: "request req_011CgoA9JcwtbZHUcwYFuiwQ"})
 	s.handle(core.Event{Type: core.EventToolResult, ToolResult: &core.ToolResult{Name: "write", IsError: true, Note: "not allowed here: run with --allow all, or allow it for this project in the terminal UI"}})
@@ -694,4 +697,10 @@ func TestNoticesWrapAtSixtyColumns(t *testing.T) {
 			t.Errorf("%q was split across lines:\n%s", word, out.text())
 		}
 	}
+}
+
+func newCols(n int) *atomic.Int32 {
+	var c atomic.Int32
+	c.Store(int32(n))
+	return &c
 }

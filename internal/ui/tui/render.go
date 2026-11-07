@@ -25,16 +25,19 @@ var (
 
 const previewLines = 6
 
-func renderUser(text string) string {
-	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
-	for i, l := range lines {
-		prefix := "  "
-		if i == 0 {
-			prefix = "> "
-		}
-		lines[i] = bold.Render(prefix + l)
+func renderUserWidth(text string, width int) string {
+	if width <= 0 {
+		width = 80
 	}
-	return "\n" + strings.Join(lines, "\n")
+	var out []string
+	for i, l := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
+		first := "  "
+		if i == 0 {
+			first = "> "
+		}
+		out = append(out, wrapHanging(bold.Render(l), width, bold.Render(first), "  "))
+	}
+	return "\n" + strings.Join(out, "\n")
 }
 
 func renderToolCall(name string, input json.RawMessage) string {
@@ -192,23 +195,50 @@ func clip(s string, n int) string {
 	return s
 }
 
-func renderHistory(msgs []provider.Message) []string {
-	inputs := map[string]json.RawMessage{}
+const resumeExchanges = 3
+
+func renderHistory(msgs []provider.Message, width int) []string {
+	start, prompts := 0, 0
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if isPrompt(msgs[i]) {
+			prompts++
+			if prompts == resumeExchanges {
+				start = i
+				break
+			}
+		}
+	}
 	var out []string
-	for _, m := range msgs {
+	if start > 0 {
+		out = append(out, dim.Render(fmt.Sprintf("%s earlier in this session not shown", plural(start, "message", "messages"))))
+	}
+	for _, m := range msgs[start:] {
 		for _, b := range m.Content {
 			switch {
 			case b.Type == provider.BlockText && m.Role == provider.RoleUser:
-				out = append(out, renderUser(b.Text))
+				out = append(out, renderUserWidth(b.Text, width))
 			case b.Type == provider.BlockText:
-				out = append(out, strings.TrimRight(b.Text, "\n"))
+				if t := renderMarkdown(b.Text, width); t != "" {
+					out = append(out, t)
+				}
 			case b.Type == provider.BlockToolUse:
-				inputs[b.ID] = b.Input
-				out = append(out, renderToolCall(b.Name, b.Input))
+				out = append(out, fit(renderToolCall(b.Name, b.Input), width))
 			case b.Type == provider.BlockToolResult && b.IsError:
-				out = append(out, errText.Render("  x "+firstLine(b.Content)))
+				out = append(out, fit(errText.Render("  x "+firstLine(b.Content)), width))
 			}
 		}
 	}
 	return out
+}
+
+func isPrompt(m provider.Message) bool {
+	if m.Role != provider.RoleUser {
+		return false
+	}
+	for _, b := range m.Content {
+		if b.Type == provider.BlockText && b.Text != "" {
+			return true
+		}
+	}
+	return false
 }

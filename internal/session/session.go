@@ -38,15 +38,16 @@ type Record struct {
 }
 
 type Info struct {
-	ID       string
-	Path     string
-	Cwd      string
-	Provider string
-	Model    string
-	Created  time.Time
-	Updated  time.Time
-	Title    string
-	Messages int
+	ID        string
+	Path      string
+	Cwd       string
+	Provider  string
+	Model     string
+	Created   time.Time
+	Updated   time.Time
+	Title     string
+	Messages  int
+	LastUsage provider.Usage
 }
 
 type Session struct {
@@ -204,6 +205,10 @@ func load(path string) (Info, []Record, error) {
 			info.Cwd, info.Provider, info.Model, info.Created = r.Cwd, r.Provider, r.Model, r.Time
 		case TypeModel:
 			info.Provider, info.Model = r.Provider, r.Model
+		case TypeUsage:
+			if r.Usage != nil {
+				info.LastUsage = *r.Usage
+			}
 		case TypeMessage:
 			info.Messages++
 			if info.Title == "" && r.Message != nil && r.Message.Role == provider.RoleUser {

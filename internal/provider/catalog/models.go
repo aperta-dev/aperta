@@ -84,6 +84,19 @@ func (c *Connections) Models(ctx context.Context, name string) ([]Model, string)
 	return fallback, fmt.Sprintf("couldn't load %s models (%s); type a model id", name, why)
 }
 
+func (c *Connections) Cached(name string) []Model {
+	c.mu.Lock()
+	list, ok := c.mem[name]
+	c.mu.Unlock()
+	if ok {
+		return list
+	}
+	if cached, ok := c.readCache(name); ok {
+		return cached.Models
+	}
+	return nil
+}
+
 func hasModel(list []Model, id string) bool {
 	for _, m := range list {
 		if m.ID == id {

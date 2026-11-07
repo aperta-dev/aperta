@@ -26,6 +26,8 @@ func (s *switcher) store() catalog.Store {
 	return s.conns.Store
 }
 
+func (s *switcher) Cached(name string) []catalog.Model { return s.conns.Cached(name) }
+
 func (s *switcher) Statuses(ctx context.Context) []catalog.Status { return s.conns.Statuses(ctx) }
 
 func (s *switcher) Probe(ctx context.Context, name string) error { return s.conns.Probe(ctx, name) }
