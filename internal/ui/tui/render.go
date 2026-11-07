@@ -72,6 +72,9 @@ func serverStatus(list []mcp.Status) string {
 
 func renderToolResult(r core.ToolResult, input json.RawMessage) string {
 	if r.IsError {
+		if r.Note != "" {
+			return errText.Render("  x " + r.Note)
+		}
 		return errText.Render("  x " + firstLine(r.Output))
 	}
 	switch r.Name {

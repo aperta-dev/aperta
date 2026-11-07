@@ -9,13 +9,49 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"net"
 	"net/http"
+	"net/http/httptrace"
 	"strconv"
 	"strings"
 	"time"
 )
 
-const DefaultIdleTimeout = 5 * time.Minute
+const (
+	DefaultIdleTimeout = 5 * time.Minute
+	ConnectTimeout     = 10 * time.Second
+	HeaderTimeout      = time.Minute
+	maxConnectRetries  = 2
+)
+
+var defaultHTTP = &http.Client{Transport: &http.Transport{
+	Proxy:                 http.ProxyFromEnvironment,
+	DialContext:           (&net.Dialer{Timeout: ConnectTimeout, KeepAlive: 30 * time.Second}).DialContext,
+	TLSHandshakeTimeout:   ConnectTimeout,
+	ResponseHeaderTimeout: HeaderTimeout,
+	ForceAttemptHTTP2:     true,
+	MaxIdleConns:          10,
+	IdleConnTimeout:       90 * time.Second,
+}}
+
+type Retry struct {
+	Attempt int
+	Max     int
+	Wait    time.Duration
+	Err     error
+}
+
+type retryKey struct{}
+
+func WithRetryNotice(ctx context.Context, fn func(Retry)) context.Context {
+	return context.WithValue(ctx, retryKey{}, fn)
+}
+
+func notifyRetry(ctx context.Context, r Retry) {
+	if fn, ok := ctx.Value(retryKey{}).(func(Retry)); ok && fn != nil {
+		fn(r)
+	}
+}
 
 type APIError struct {
 	Provider  string
@@ -68,9 +104,15 @@ func (c *Client) Stream(ctx context.Context, req Request, emitted func() bool, r
 			return ctx.Err()
 		}
 		wait, ok := retryDelay(err, attempt)
-		if !ok || emitted() || attempt >= c.MaxRetries {
+		limit := c.MaxRetries
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.Type == "connection_error" {
+			limit = min(limit, maxConnectRetries)
+		}
+		if !ok || emitted() || attempt >= limit {
 			return err
 		}
+		notifyRetry(ctx, Retry{Attempt: attempt + 2, Max: limit + 1, Wait: wait, Err: err})
 		t := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
@@ -115,12 +157,18 @@ func (c *Client) once(ctx context.Context, req Request, read func(*Events) error
 	httpReq.Header.Set("accept", "text/event-stream")
 	hc := c.HTTP
 	if hc == nil {
-		hc = http.DefaultClient
+		hc = defaultHTTP
 	}
-	res, err := hc.Do(httpReq)
+	sent := false
+	trace := &httptrace.ClientTrace{WroteRequest: func(httptrace.WroteRequestInfo) { sent = true }}
+	res, err := hc.Do(httpReq.WithContext(httptrace.WithClientTrace(httpReq.Context(), trace)))
 	if err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		var ne net.Error
+		if sent && errors.As(err, &ne) && ne.Timeout() {
+			return c.Fail("no_response", "no answer within "+HeaderTimeout.String(), false)
 		}
 		return c.Fail("connection_error", err.Error(), true)
 	}

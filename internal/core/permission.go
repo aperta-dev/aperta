@@ -22,6 +22,11 @@ type Permissions interface {
 	Check(ctx context.Context, req PermissionRequest) error
 }
 
+var (
+	ErrDenied    = errors.New("the user denied this tool call; ask what they want instead")
+	ErrCannotAsk = errors.New("no one can approve it here")
+)
+
 type Decision int
 
 const (
@@ -49,7 +54,7 @@ func (g *Gate) Check(ctx context.Context, req PermissionRequest) error {
 		return nil
 	}
 	if g.Prompter == nil {
-		return fmt.Errorf("permission denied: %s needs approval, and this session cannot ask; rerun with --allow all or allow it for this project in the terminal UI", req.Tool)
+		return fmt.Errorf("permission denied: %s needs approval, and this session cannot ask; rerun with --allow all or allow it for this project in the terminal UI: %w", req.Tool, ErrCannotAsk)
 	}
 	d, err := g.Prompter.Ask(ctx, req, rule)
 	if err != nil {
@@ -66,7 +71,7 @@ func (g *Gate) Check(ctx context.Context, req PermissionRequest) error {
 		}
 		return nil
 	}
-	return errors.New("the user denied this tool call; ask what they want instead")
+	return ErrDenied
 }
 
 func ProjectRule(req PermissionRequest) string {

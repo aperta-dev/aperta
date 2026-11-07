@@ -14,6 +14,7 @@ const (
 	EventToolResult   EventType = "tool_result"
 	EventUsage        EventType = "usage"
 	EventError        EventType = "error"
+	EventRetry        EventType = "retry"
 	EventDone         EventType = "done"
 )
 
@@ -28,6 +29,20 @@ type Event struct {
 	Total      *provider.Usage     `json:"total,omitempty"`
 	StopReason provider.StopReason `json:"stop_reason,omitempty"`
 	Error      string              `json:"error,omitempty"`
+	Message    string              `json:"message,omitempty"`
+	Detail     string              `json:"detail,omitempty"`
+}
+
+func StopNote(r provider.StopReason) string {
+	switch r {
+	case provider.StopMaxTokens:
+		return "The reply hit the length limit and was cut off. Ask it to continue, or raise --max-tokens."
+	case provider.StopRefusal:
+		return "The model declined to answer this."
+	case provider.StopContextWindow:
+		return "This conversation is too long for the model. Start a new session to continue."
+	}
+	return ""
 }
 
 type ToolCall struct {
@@ -41,4 +56,5 @@ type ToolResult struct {
 	Name    string `json:"name"`
 	Output  string `json:"output"`
 	IsError bool   `json:"is_error,omitempty"`
+	Note    string `json:"note,omitempty"`
 }

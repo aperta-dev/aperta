@@ -414,3 +414,68 @@ func TestProjectRulesOnlyApplyToTheirProject(t *testing.T) {
 		t.Errorf("rule for one project allowed a write in another")
 	}
 }
+
+func TestPlainErrorsRetriesAndStopNotes(t *testing.T) {
+	dir := t.TempDir()
+	api := &fakeAPI{t: t, replies: []func(http.ResponseWriter){overloaded, textTurn("Recovered.")}}
+	events, _, code := runAperta(t, api, dir, "hi")
+	if code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	var retries []string
+	for _, ev := range events {
+		if ev["type"] == "retry" {
+			retries = append(retries, fmt.Sprint(ev["message"]))
+		}
+	}
+	if len(retries) != 1 || retries[0] != "Anthropic is overloaded · trying again in 1s (2 of 5)" || len(api.requests) != 2 {
+		t.Errorf("retries = %q after %d requests", retries, len(api.requests))
+	}
+
+	unauthorized := &fakeAPI{t: t, replies: []func(http.ResponseWriter){func(w http.ResponseWriter) {
+		w.Header().Set("request-id", "req_9")
+		w.WriteHeader(401)
+		io.WriteString(w, `{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}`)
+	}}}
+	events, _, code = runAperta(t, unauthorized, dir, "hi")
+	last := events[len(events)-1]
+	if code != 1 || last["message"] != "Anthropic rejected the API key. Run /connect (or aperta connect anthropic) to add a new one." || last["detail"] != "request req_9" {
+		t.Errorf("401: exit %d, %v", code, last)
+	}
+
+	cut := &fakeAPI{t: t, replies: []func(http.ResponseWriter){sse(msgStart,
+		`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Partial"}}`,
+		`{"type":"content_block_stop","index":0}`,
+		`{"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":5}}`,
+		`{"type":"message_stop"}`,
+	)}}
+	events, _, _ = runAperta(t, cut, dir, "hi")
+	last = events[len(events)-1]
+	if last["type"] != "done" || !strings.Contains(fmt.Sprint(last["message"]), "hit the length limit") {
+		t.Errorf("max_tokens: %v", last)
+	}
+
+	srv := httptest.NewServer(http.NotFoundHandler())
+	srv.Close()
+	cmd := exec.Command(binary, "run", "--cwd", dir, "hi")
+	cmd.Env = append(os.Environ(), "ANTHROPIC_API_KEY=test-key", "ANTHROPIC_BASE_URL="+srv.URL, "APERTA_HOME="+t.TempDir())
+	out, _ := cmd.CombinedOutput()
+	text := string(out)
+	if !strings.Contains(text, "[retry] can't reach Anthropic · trying again in") || !strings.Contains(text, "error: Can't reach Anthropic. Check your internet connection, then send again.") || strings.Contains(text, "dial tcp") {
+		t.Errorf("no network, plain output:\n%s", text)
+	}
+}
+
+func TestDeniedToolShowsPlainNote(t *testing.T) {
+	dir := t.TempDir()
+	api := &fakeAPI{t: t, replies: []func(http.ResponseWriter){toolTurn("t1", "write", `{"path":"a.txt","content":"x"}`), textTurn("ok")}}
+	srv := httptest.NewServer(api)
+	defer srv.Close()
+	cmd := exec.Command(binary, "run", "--cwd", dir, "write it")
+	cmd.Env = append(os.Environ(), "ANTHROPIC_API_KEY=test-key", "ANTHROPIC_BASE_URL="+srv.URL, "APERTA_HOME="+t.TempDir())
+	out, _ := cmd.CombinedOutput()
+	if !strings.Contains(string(out), "[write failed] not allowed here: run with --allow all, or allow it for this project in the terminal UI") {
+		t.Errorf("headless denial:\n%s", out)
+	}
+}

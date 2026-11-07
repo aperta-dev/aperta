@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"gitlab.com/aperta/aperta/internal/provider"
+	"gitlab.com/aperta/aperta/internal/provider/transport"
 	"gitlab.com/aperta/aperta/internal/tool"
 )
 
@@ -48,7 +49,11 @@ var ErrMaxTurns = errors.New("reached the turn limit")
 
 func (a *Agent) Run(ctx context.Context, prompt string, emit func(Event)) error {
 	fail := func(turn int, err error) error {
-		emit(Event{Type: EventError, Turn: turn, Error: err.Error()})
+		msg, detail := transport.Describe(err)
+		if errors.Is(err, ErrMaxTurns) {
+			msg = fmt.Sprintf("Stopped after %d steps, the limit for one request. Send again to let it continue.", a.MaxTurns)
+		}
+		emit(Event{Type: EventError, Turn: turn, Error: err.Error(), Message: msg, Detail: detail})
 		return err
 	}
 	if err := a.add(provider.Message{
@@ -59,7 +64,10 @@ func (a *Agent) Run(ctx context.Context, prompt string, emit func(Event)) error 
 	}
 	var total provider.Usage
 	for turn := 1; a.MaxTurns <= 0 || turn <= a.MaxTurns; turn++ {
-		resp, err := a.Provider.Stream(ctx, provider.Request{
+		rctx := transport.WithRetryNotice(ctx, func(r transport.Retry) {
+			emit(Event{Type: EventRetry, Turn: turn, Message: transport.RetryText(r)})
+		})
+		resp, err := a.Provider.Stream(rctx, provider.Request{
 			Model:     a.Model,
 			System:    a.System,
 			Messages:  a.Messages,
@@ -89,7 +97,7 @@ func (a *Agent) Run(ctx context.Context, prompt string, emit func(Event)) error 
 			continue
 		case len(calls) == 0:
 			sum := total
-			emit(Event{Type: EventDone, Turn: turn, StopReason: resp.StopReason, Total: &sum})
+			emit(Event{Type: EventDone, Turn: turn, StopReason: resp.StopReason, Total: &sum, Message: StopNote(resp.StopReason)})
 			return nil
 		}
 		results := make([]provider.Block, 0, len(calls))
@@ -99,11 +107,11 @@ func (a *Agent) Run(ctx context.Context, prompt string, emit func(Event)) error 
 				continue
 			}
 			emit(Event{Type: EventToolCall, Turn: turn, ToolCall: &ToolCall{ID: call.ID, Name: call.Name, Input: call.Input}})
-			out, isErr := a.runTool(ctx, call, resp.StopReason)
+			out, isErr, note := a.runTool(ctx, call, resp.StopReason)
 			if ctx.Err() != nil {
-				out, isErr = "interrupted by the user while this tool ran", true
+				out, isErr, note = "interrupted by the user while this tool ran", true, "stopped"
 			}
-			emit(Event{Type: EventToolResult, Turn: turn, ToolResult: &ToolResult{ID: call.ID, Name: call.Name, Output: out, IsError: isErr}})
+			emit(Event{Type: EventToolResult, Turn: turn, ToolResult: &ToolResult{ID: call.ID, Name: call.Name, Output: out, IsError: isErr, Note: note}})
 			results = append(results, provider.Block{Type: provider.BlockToolResult, ToolUseID: call.ID, Content: out, IsError: isErr})
 		}
 		if err := a.add(provider.Message{Role: provider.RoleUser, Content: results}); err != nil {
@@ -139,24 +147,33 @@ func (a *Agent) tools() []tool.Tool {
 	return all
 }
 
-func (a *Agent) runTool(ctx context.Context, call provider.Block, stop provider.StopReason) (string, bool) {
+func (a *Agent) runTool(ctx context.Context, call provider.Block, stop provider.StopReason) (string, bool, string) {
 	if stop == provider.StopMaxTokens {
-		return "the response hit max_tokens before this tool call was complete; send a smaller call", true
+		return "the response hit max_tokens before this tool call was complete; send a smaller call", true, "the reply was cut off before this call was complete"
 	}
 	t := tool.Find(a.tools(), call.Name)
 	if t == nil {
-		return fmt.Sprintf("unknown tool %q", call.Name), true
+		return fmt.Sprintf("unknown tool %q", call.Name), true, ""
 	}
 	if a.Permissions != nil {
 		if err := a.Permissions.Check(ctx, PermissionRequest{Tool: call.Name, Input: call.Input, ReadOnly: t.ReadOnly()}); err != nil {
-			return err.Error(), true
+			note := ""
+			switch {
+			case errors.Is(err, ErrDenied):
+				note = "denied"
+			case errors.Is(err, ErrCannotAsk):
+				note = "not allowed here: run with --allow all, or allow it for this project in the terminal UI"
+			case errors.Is(err, context.Canceled):
+				note = "stopped"
+			}
+			return err.Error(), true, note
 		}
 	}
 	out, err := t.Run(ctx, tool.Env{Dir: a.Dir}, call.Input)
 	if err != nil {
-		return truncate(err.Error()), true
+		return truncate(err.Error()), true, ""
 	}
-	return truncate(out), false
+	return truncate(out), false, ""
 }
 
 func truncate(s string) string {

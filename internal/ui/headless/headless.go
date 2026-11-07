@@ -46,13 +46,30 @@ func (p *Printer) Handle(ev core.Event) {
 		fmt.Fprintf(p.Err, "[%s] %s\n", ev.ToolCall.Name, summarize(ev.ToolCall.Input))
 	case core.EventToolResult:
 		if ev.ToolResult.IsError {
-			fmt.Fprintf(p.Err, "[%s failed] %s\n", ev.ToolResult.Name, firstLine(ev.ToolResult.Output))
+			why := ev.ToolResult.Note
+			if why == "" {
+				why = firstLine(ev.ToolResult.Output)
+			}
+			fmt.Fprintf(p.Err, "[%s failed] %s\n", ev.ToolResult.Name, why)
 		}
+	case core.EventRetry:
+		p.endLine()
+		fmt.Fprintf(p.Err, "[retry] %s\n", ev.Message)
 	case core.EventError:
 		p.endLine()
-		fmt.Fprintf(p.Err, "error: %s\n", ev.Error)
+		msg := ev.Message
+		if msg == "" {
+			msg = ev.Error
+		}
+		if ev.Detail != "" {
+			msg += " (" + ev.Detail + ")"
+		}
+		fmt.Fprintf(p.Err, "error: %s\n", msg)
 	case core.EventDone:
 		p.endLine()
+		if ev.Message != "" {
+			fmt.Fprintln(p.Err, ev.Message)
+		}
 		if t := ev.Total; t != nil {
 			fmt.Fprintf(p.Err, "[done] %s · %d in, %d out, %d cached\n", ev.StopReason, t.InputTokens+t.CacheReadTokens+t.CacheWriteTokens, t.OutputTokens, t.CacheReadTokens)
 		}

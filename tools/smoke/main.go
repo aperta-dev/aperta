@@ -104,6 +104,7 @@ func run() int {
 		{"anthropic " + haiku + " headless", needAN, flowAnthropic},
 		{"narrow 60-column terminal", needOR, flowNarrow},
 		{"bad key is refused calmly", needNothing, flowBadKey},
+		{"no network ends in a plain message", needNothing, flowNoNetwork},
 		{"no key in sessions, logs or caches", needAny, flowNoLeaks},
 	}
 	env := &shared{work: work, home: filepath.Join(work, "home"), dir: filepath.Join(work, "project")}
@@ -681,6 +682,7 @@ func flowResume(s *shared) error {
 
 type event struct {
 	Type       string                 `json:"type"`
+	Message    string                 `json:"message"`
 	Kind       string                 `json:"kind"`
 	Text       string                 `json:"text"`
 	Error      string                 `json:"error"`
@@ -732,7 +734,10 @@ func headless(dir, home string, env []string, args ...string) ([]event, string, 
 	if err != nil {
 		last := ""
 		for _, ev := range events {
-			if ev.Error != "" {
+			switch {
+			case ev.Message != "" && ev.Type == "error":
+				last = ev.Message
+			case ev.Error != "":
 				last = ev.Error
 			}
 		}
@@ -1002,6 +1007,38 @@ func flowNarrow(s *shared) error {
 		return err
 	}
 	return t.quit()
+}
+
+func flowNoNetwork(s *shared) error {
+	home := filepath.Join(s.work, "home-offline")
+	start := time.Now()
+	events, stderr, err := headless(s.dir, home, []string{"ANTHROPIC_API_KEY=sk-ant-offline-000000000000", "ANTHROPIC_BASE_URL=http://127.0.0.1:9"}, "--provider", "anthropic", "--model", haiku, "hi")
+	if err == nil {
+		return errors.New("a run with no network succeeded")
+	}
+	if took := time.Since(start); took > 20*time.Second {
+		return fmt.Errorf("giving up took %s", took.Round(time.Second))
+	}
+	var retries int
+	msg := ""
+	for _, ev := range events {
+		if ev.Type == "retry" {
+			retries++
+		}
+		if ev.Type == "error" {
+			msg = ev.Message
+		}
+	}
+	if retries == 0 {
+		return errors.New("no retry was shown before giving up")
+	}
+	if msg != "Can't reach Anthropic. Check your internet connection, then send again." {
+		return fmt.Errorf("error message = %q", msg)
+	}
+	if strings.Contains(err.Error(), "dial tcp") {
+		return fmt.Errorf("the run's error shows raw network details: %s", tail(err.Error(), 2))
+	}
+	return calm(msg + "\n" + stderr)
 }
 
 func flowBadKey(s *shared) error {

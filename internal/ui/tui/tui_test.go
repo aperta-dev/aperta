@@ -10,10 +10,12 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"gitlab.com/aperta/aperta/internal/core"
 	"gitlab.com/aperta/aperta/internal/provider"
@@ -168,7 +170,10 @@ func TestEscStopsRunningTurnAndDenyIsReported(t *testing.T) {
 	p.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitFor(t, "prompt", func() bool { return strings.Contains(out.text(), "Allow edit?") })
 	p.Send(tea.KeyPressMsg{Code: '3', Text: "3"})
-	waitFor(t, "denial", func() bool { return strings.Contains(out.text(), "the user denied this tool call") })
+	waitFor(t, "denial", func() bool { return strings.Contains(out.text(), "x denied") })
+	if strings.Contains(out.text(), "ask what they want instead") {
+		t.Error("the message meant for the model was shown to the user")
+	}
 	waitFor(t, "answer", func() bool { return strings.Contains(out.text(), "Understood.") })
 	if data, _ := os.ReadFile(filepath.Join(dir, "greet.txt")); string(data) != "hello world\n" {
 		t.Errorf("denied edit ran: %q", data)
@@ -628,5 +633,65 @@ func TestModelPickerHidesOlderUntilCtrlA(t *testing.T) {
 	d.keys("enter")
 	if got := models.last(); len(got) != 1 || got[0].Model != "claude-opus-4-8" {
 		t.Errorf("switched %v", got)
+	}
+}
+
+func TestErrorEventWithoutMessageShowsTheError(t *testing.T) {
+	out := &screen{}
+	p := New(Options{Agent: &core.Agent{Provider: &named{name: "anthropic"}, Model: "m"}, Version: "test", Output: out, Size: [2]int{100, 20}})
+	go p.Run()
+	t.Cleanup(p.Kill)
+	waitFor(t, "start", func() bool { return strings.Contains(out.text(), "Aperta test") })
+	var cols atomic.Int32
+	cols.Store(100)
+	s := &stream{p: p, inputs: map[string]json.RawMessage{}, cols: &cols}
+	s.handle(core.Event{Type: core.EventError, Error: "saving session: disk full"})
+	waitFor(t, "fallback to the raw error", func() bool { return strings.Contains(out.text(), "saving session: disk full") })
+	s.handle(core.Event{Type: core.EventError, Error: "RAW-DETAIL-xyz", Message: "Plain words.", Detail: "request req_1"})
+	waitFor(t, "plain message", func() bool { return strings.Contains(out.text(), "Plain words.") })
+	waitFor(t, "detail", func() bool { return strings.Contains(out.text(), "request req_1") })
+	if strings.Contains(out.text(), "RAW-DETAIL-xyz") {
+		t.Error("the raw error was shown next to its plain message")
+	}
+	s.handle(core.Event{Type: core.EventRetry, Message: "Anthropic is overloaded · trying again in 2s (2 of 5)"})
+	waitFor(t, "retry line in scrollback", func() bool {
+		return strings.Contains(out.text(), "Anthropic is overloaded · trying again in 2s (2 of 5)")
+	})
+}
+
+func TestNoticesWrapAtSixtyColumns(t *testing.T) {
+	out := &screen{}
+	p := New(Options{Agent: &core.Agent{Provider: &named{name: "anthropic"}, Model: "m"}, Version: "test", Output: out, Size: [2]int{60, 20}})
+	go p.Run()
+	t.Cleanup(p.Kill)
+	waitFor(t, "start", func() bool { return strings.Contains(out.text(), "Aperta test") })
+	var cols atomic.Int32
+	cols.Store(60)
+	s := &stream{p: p, inputs: map[string]json.RawMessage{}, cols: &cols}
+	s.handle(core.Event{Type: core.EventRetry, Message: "can't reach Anthropic · trying again in 2s (2 of 3)"})
+	s.handle(core.Event{Type: core.EventError, Message: "Anthropic rejected the API key. Run /connect (or aperta connect anthropic) to add a new one.", Detail: "request req_011CgoA9JcwtbZHUcwYFuiwQ"})
+	s.handle(core.Event{Type: core.EventToolResult, ToolResult: &core.ToolResult{Name: "write", IsError: true, Note: "not allowed here: run with --allow all, or allow it for this project in the terminal UI"}})
+	s.handle(core.Event{Type: core.EventDone, Message: core.StopNote(provider.StopMaxTokens)})
+	waitFor(t, "all notices", func() bool {
+		x := strings.Join(strings.Fields(out.text()), " ")
+		return strings.Contains(x, "add a new one.") && strings.Contains(x, "req_011CgoA9JcwtbZHUcwYFuiwQ") && strings.Contains(x, "terminal UI") && strings.Contains(x, "--max-tokens")
+	})
+	for _, line := range strings.Split(out.text(), "\n") {
+		if w := lipgloss.Width(strings.TrimRight(line, " \r")); w > 60 {
+			t.Errorf("line is %d columns at 60: %q", w, line)
+		}
+	}
+	for _, word := range []string{"aperta", "connect", "anthropic)", "--allow", "terminal"} {
+		found := false
+		for _, line := range strings.Split(out.text(), "\n") {
+			for _, f := range strings.Fields(line) {
+				if f == word {
+					found = true
+				}
+			}
+		}
+		if !found {
+			t.Errorf("%q was split across lines:\n%s", word, out.text())
+		}
 	}
 }

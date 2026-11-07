@@ -8,11 +8,13 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"gitlab.com/aperta/aperta/internal/core"
 	"gitlab.com/aperta/aperta/internal/provider"
@@ -73,6 +75,7 @@ type model struct {
 	status   string
 	ask      *askMsg
 	pick     *picker
+	cols     atomic.Int32
 	loads    int
 	conn     *connector
 	pending  *pendingModel
@@ -160,6 +163,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
+		m.cols.Store(int32(msg.Width))
 		m.input.SetWidth(max(msg.Width-2, 10))
 		return m, nil
 	case tea.KeyPressMsg:
@@ -316,7 +320,7 @@ func (m *model) submit() (tea.Model, tea.Cmd) {
 func (m *model) runTurn(ctx context.Context, prompt string) {
 	p := m.prog
 	p.Println(renderUser(prompt))
-	s := &stream{p: p, inputs: map[string]json.RawMessage{}}
+	s := &stream{p: p, inputs: map[string]json.RawMessage{}, cols: &m.cols}
 	err := m.opts.Agent.Run(ctx, prompt, s.handle)
 	s.flush()
 	p.Send(doneMsg{err: err})
@@ -326,6 +330,15 @@ type stream struct {
 	p      *tea.Program
 	live   string
 	inputs map[string]json.RawMessage
+	cols   *atomic.Int32
+}
+
+func (s *stream) say(text string) {
+	width := 80
+	if s.cols != nil && s.cols.Load() > 0 {
+		width = int(s.cols.Load())
+	}
+	s.p.Println(lipgloss.Wrap(text, max(width-1, 20), " "))
 }
 
 func (s *stream) flush() {
@@ -357,18 +370,37 @@ func (s *stream) handle(ev core.Event) {
 		s.p.Send(statusMsg("running " + ev.ToolCall.Name))
 	case core.EventToolResult:
 		if out := renderToolResult(*ev.ToolResult, s.inputs[ev.ToolResult.ID]); out != "" {
-			s.p.Println(out)
+			if ev.ToolResult.Note != "" {
+				s.say(out)
+			} else {
+				s.p.Println(out)
+			}
 		}
 		s.p.Send(statusMsg("working"))
 	case core.EventUsage:
 		s.p.Send(usageMsg(*ev.Usage))
+	case core.EventRetry:
+		s.flush()
+		s.say(dim.Render(ev.Message))
+		s.p.Send(statusMsg("waiting to try again"))
 	case core.EventError:
 		s.flush()
 		if ev.Error != context.Canceled.Error() {
-			s.p.Println(errText.Render("error: " + ev.Error))
+			text := ev.Message
+			if text == "" {
+				text = ev.Error
+			}
+			line := errText.Render(text)
+			if ev.Detail != "" {
+				line += "\n" + dim.Render("  "+ev.Detail)
+			}
+			s.say(line)
 		}
 	case core.EventDone:
 		s.flush()
+		if ev.Message != "" {
+			s.say(warn.Render(ev.Message))
+		}
 	}
 }
 
