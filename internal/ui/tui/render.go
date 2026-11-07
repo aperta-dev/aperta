@@ -10,9 +10,9 @@ import (
 	"charm.land/lipgloss/v2"
 	xansi "github.com/charmbracelet/x/ansi"
 
-	"gitlab.com/aperta/aperta/internal/core"
-	"gitlab.com/aperta/aperta/internal/provider"
-	"gitlab.com/aperta/aperta/internal/tool/mcp"
+	"gitlab.com/aperta-dev/aperta/internal/core"
+	"gitlab.com/aperta-dev/aperta/internal/provider"
+	"gitlab.com/aperta-dev/aperta/internal/tool/mcp"
 )
 
 var (

@@ -11,9 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"gitlab.com/aperta/aperta/internal/config"
-	"gitlab.com/aperta/aperta/internal/provider/anthropic"
-	"gitlab.com/aperta/aperta/internal/provider/transport"
+	"gitlab.com/aperta-dev/aperta/internal/config"
+	"gitlab.com/aperta-dev/aperta/internal/provider/anthropic"
+	"gitlab.com/aperta-dev/aperta/internal/provider/transport"
 )
 
 const checkTimeout = 10 * time.Second

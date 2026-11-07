@@ -14,7 +14,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"gitlab.com/aperta/aperta/internal/ui/tui"
+	"gitlab.com/aperta-dev/aperta/internal/ui/tui"
 )
 
 type termOut struct {

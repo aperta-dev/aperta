@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"gitlab.com/aperta/aperta/internal/core"
+	"gitlab.com/aperta-dev/aperta/internal/core"
 )
 
 type Printer struct {

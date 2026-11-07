@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"gitlab.com/aperta/aperta/internal/config"
-	"gitlab.com/aperta/aperta/internal/provider"
-	"gitlab.com/aperta/aperta/internal/provider/anthropic"
-	"gitlab.com/aperta/aperta/internal/provider/openai"
+	"gitlab.com/aperta-dev/aperta/internal/config"
+	"gitlab.com/aperta-dev/aperta/internal/provider"
+	"gitlab.com/aperta-dev/aperta/internal/provider/anthropic"
+	"gitlab.com/aperta-dev/aperta/internal/provider/openai"
 )
 
 type Kind int

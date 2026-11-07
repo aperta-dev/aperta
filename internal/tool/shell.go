@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"gitlab.com/aperta/aperta/internal/provider"
+	"gitlab.com/aperta-dev/aperta/internal/provider"
 )
 
 const (

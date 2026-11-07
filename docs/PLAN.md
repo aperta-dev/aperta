@@ -52,7 +52,7 @@ A CLA, not a DCO: relicensing and commercial use need a license grant to the lic
 
 ## Hosting
 
-- GitLab is the main repo, under the group `aperta` (looks free; to be claimed).
+- GitLab is the main repo, under the group `aperta-dev` (`aperta` was taken).
 - A read-only push mirror goes to GitHub (e.g. `apertahq/aperta`). Its README points to GitLab for issues and merge requests.
 
 ## Clean room

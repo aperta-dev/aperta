@@ -25,9 +25,9 @@ import (
 	"github.com/charmbracelet/x/vt"
 	"github.com/creack/pty"
 
-	"gitlab.com/aperta/aperta/internal/config"
-	"gitlab.com/aperta/aperta/internal/provider/anthropic"
-	"gitlab.com/aperta/aperta/internal/provider/transport"
+	"gitlab.com/aperta-dev/aperta/internal/config"
+	"gitlab.com/aperta-dev/aperta/internal/provider/anthropic"
+	"gitlab.com/aperta-dev/aperta/internal/provider/transport"
 )
 
 const (

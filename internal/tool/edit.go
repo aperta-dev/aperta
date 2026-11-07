@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"gitlab.com/aperta/aperta/internal/provider"
+	"gitlab.com/aperta-dev/aperta/internal/provider"
 )
 
 type Edit struct{}

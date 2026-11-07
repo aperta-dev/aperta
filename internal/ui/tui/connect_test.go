@@ -13,10 +13,10 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"gitlab.com/aperta/aperta/internal/config"
-	"gitlab.com/aperta/aperta/internal/core"
-	"gitlab.com/aperta/aperta/internal/provider/catalog"
-	"gitlab.com/aperta/aperta/internal/tool"
+	"gitlab.com/aperta-dev/aperta/internal/config"
+	"gitlab.com/aperta-dev/aperta/internal/core"
+	"gitlab.com/aperta-dev/aperta/internal/provider/catalog"
+	"gitlab.com/aperta-dev/aperta/internal/tool"
 )
 
 const goodKey = "sk-or-v1-0123456789abcdefGOOD"

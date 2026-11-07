@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 
-	"gitlab.com/aperta/aperta/internal/provider"
-	"gitlab.com/aperta/aperta/internal/provider/transport"
-	"gitlab.com/aperta/aperta/internal/tool"
+	"gitlab.com/aperta-dev/aperta/internal/provider"
+	"gitlab.com/aperta-dev/aperta/internal/provider/transport"
+	"gitlab.com/aperta-dev/aperta/internal/tool"
 )
 
 const maxToolOutput = 100_000

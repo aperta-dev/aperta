@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"gitlab.com/aperta/aperta/internal/provider"
+	"gitlab.com/aperta-dev/aperta/internal/provider"
 )
 
 type Env struct {

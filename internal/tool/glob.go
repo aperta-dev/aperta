@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"gitlab.com/aperta/aperta/internal/provider"
+	"gitlab.com/aperta-dev/aperta/internal/provider"
 )
 
 const globMaxResults = 500

@@ -12,10 +12,10 @@ import (
 	"charm.land/lipgloss/v2"
 	xansi "github.com/charmbracelet/x/ansi"
 
-	"gitlab.com/aperta/aperta/internal/core"
-	"gitlab.com/aperta/aperta/internal/provider"
-	"gitlab.com/aperta/aperta/internal/provider/catalog"
-	"gitlab.com/aperta/aperta/internal/session"
+	"gitlab.com/aperta-dev/aperta/internal/core"
+	"gitlab.com/aperta-dev/aperta/internal/provider"
+	"gitlab.com/aperta-dev/aperta/internal/provider/catalog"
+	"gitlab.com/aperta-dev/aperta/internal/session"
 )
 
 func plain(s string) string { return ansi.ReplaceAllString(s, "") }
