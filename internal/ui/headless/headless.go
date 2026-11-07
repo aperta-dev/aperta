@@ -1,0 +1,86 @@
+package headless
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"strings"
+	"sync"
+
+	"gitlab.com/aperta/aperta/internal/core"
+)
+
+type Printer struct {
+	JSON bool
+	Out  io.Writer
+	Err  io.Writer
+
+	mu      sync.Mutex
+	enc     *json.Encoder
+	midLine bool
+}
+
+func (p *Printer) Handle(ev core.Event) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.JSON {
+		if p.enc == nil {
+			p.enc = json.NewEncoder(p.Out)
+		}
+		p.enc.Encode(ev)
+		return
+	}
+	switch ev.Type {
+	case core.EventMessageDelta:
+		if ev.Kind == "text" {
+			io.WriteString(p.Out, ev.Text)
+			p.midLine = !strings.HasSuffix(ev.Text, "\n")
+		}
+	case core.EventToolCall:
+		p.endLine()
+		fmt.Fprintf(p.Err, "[%s] %s\n", ev.ToolCall.Name, summarize(ev.ToolCall.Input))
+	case core.EventToolResult:
+		if ev.ToolResult.IsError {
+			fmt.Fprintf(p.Err, "[%s failed] %s\n", ev.ToolResult.Name, firstLine(ev.ToolResult.Output))
+		}
+	case core.EventError:
+		p.endLine()
+		fmt.Fprintf(p.Err, "error: %s\n", ev.Error)
+	case core.EventDone:
+		p.endLine()
+		if t := ev.Total; t != nil {
+			fmt.Fprintf(p.Err, "[done] %s · %d in, %d out, %d cached\n", ev.StopReason, t.InputTokens+t.CacheReadTokens+t.CacheWriteTokens, t.OutputTokens, t.CacheReadTokens)
+		}
+	}
+}
+
+func (p *Printer) endLine() {
+	if p.midLine {
+		io.WriteString(p.Out, "\n")
+		p.midLine = false
+	}
+}
+
+func summarize(input json.RawMessage) string {
+	var m map[string]any
+	if json.Unmarshal(input, &m) != nil {
+		return ""
+	}
+	for _, k := range []string{"command", "path", "pattern"} {
+		if v, ok := m[k].(string); ok && v != "" {
+			return firstLine(v)
+		}
+	}
+	return ""
+}
+
+func firstLine(s string) string {
+	s, _, cut := strings.Cut(strings.TrimSpace(s), "\n")
+	if len(s) > 120 {
+		s, cut = s[:120], true
+	}
+	if cut {
+		s += " ..."
+	}
+	return s
+}
