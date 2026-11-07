@@ -1,0 +1,17 @@
+{
+ "object": "list",
+ "data": [
+  {
+   "id": "qwen3-coder:30b",
+   "object": "model",
+   "created": 1790000000,
+   "owned_by": "library"
+  },
+  {
+   "id": "llama4:latest",
+   "object": "model",
+   "created": 1780000000,
+   "owned_by": "library"
+  }
+ ]
+}

@@ -28,7 +28,7 @@ func fakeOpenRouter(t *testing.T) *httptest.Server {
 			w.WriteHeader(http.StatusUnauthorized)
 			w.Write([]byte(`{"error":{"message":"No auth credentials found","code":401}}`))
 		default:
-			w.Write([]byte(`{"data":[{"id":"anthropic/claude-haiku-4-5"},{"id":"openai/gpt-6-luna"}]}`))
+			w.Write([]byte(`{"data":[{"id":"anthropic/claude-haiku-4-5","context_length":200000,"supported_parameters":["tools"],"pricing":{"prompt":"0.000001","completion":"0.000005"}},{"id":"openai/gpt-6-luna","supported_parameters":["temperature"],"pricing":{"prompt":"0","completion":"0"}}]}`))
 		}
 	}))
 	t.Cleanup(srv.Close)
@@ -52,7 +52,7 @@ func connectSetup(t *testing.T, withProvider bool) (*tea.Program, *core.Agent, *
 		"ollama":     "http://127.0.0.1:9/v1",
 		"lmstudio":   "http://127.0.0.1:9/v1",
 	}}
-	models := &fakeModels{conns: conns, choices: []catalog.Choice{{Provider: "openrouter", Model: "anthropic/claude-haiku-4-5"}}}
+	models := &fakeModels{conns: conns}
 	agent := &core.Agent{Model: "claude-sonnet-5-5", Tools: tool.Defaults(), Dir: t.TempDir()}
 	if withProvider {
 		agent.Provider = &named{name: "anthropic"}
@@ -105,8 +105,11 @@ func TestConnectSavesOnlyAValidatedKey(t *testing.T) {
 	press(p, "enter")
 	waitFor(t, "connected", func() bool { return strings.Contains(out.text(), "connected: openrouter (key sk-or-…GOOD)") })
 	waitFor(t, "picker for the provider", func() bool { return strings.Contains(out.text(), "Pick a model from") })
-	if !strings.Contains(out.text(), "1 openrouter/anthropic/claude-haiku-4-5") {
-		t.Errorf("picker does not list the provider's models:\n%s", out.text())
+	waitFor(t, "live list", func() bool {
+		return strings.Contains(out.text(), "anthropic/claude-haiku-4-5  $1.00/$5.00 per 1M · 200k context")
+	})
+	if strings.Contains(out.text(), "openai/gpt-6-luna") {
+		t.Errorf("a model without tool support was listed:\n%s", out.text())
 	}
 	if strings.Contains(out.text(), goodKey) || strings.Contains(out.text(), "wrongwrongwrong") {
 		t.Fatal("a key was shown on screen")
@@ -184,7 +187,7 @@ func TestFirstRunWithoutProviderOpensConnect(t *testing.T) {
 	p.Send(tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
 	p.Send(tea.PasteMsg{Content: goodKey})
 	press(p, "enter")
-	waitFor(t, "picker", func() bool { return strings.Contains(out.text(), "1 openrouter/anthropic/claude-haiku-4-5") })
-	press(p, "1")
+	waitFor(t, "picker", func() bool { return strings.Contains(out.text(), "> anthropic/claude-haiku-4-5") })
+	press(p, "enter")
 	waitFor(t, "switched", func() bool { return strings.Contains(out.text(), "model: openrouter/anthropic/claude-haiku-4-5") })
 }

@@ -15,8 +15,8 @@ type switcher struct {
 	conns   *catalog.Connections
 }
 
-func (s *switcher) Choices(ctx context.Context) ([]catalog.Choice, []string) {
-	return catalog.Available(ctx, s.conns.Overrides, s.store(), 3)
+func (s *switcher) Models(ctx context.Context, name string) ([]catalog.Model, string) {
+	return s.conns.Models(ctx, name)
 }
 
 func (s *switcher) store() catalog.Store {

@@ -1,0 +1,65 @@
+{
+ "object": "list",
+ "data": [
+  {
+   "id": "gpt-6-sol",
+   "object": "model",
+   "created": 1790000000,
+   "owned_by": "system"
+  },
+  {
+   "id": "text-embedding-3-large",
+   "object": "model",
+   "created": 1705953180,
+   "owned_by": "system"
+  },
+  {
+   "id": "gpt-6-luna",
+   "object": "model",
+   "created": 1791000000,
+   "owned_by": "system"
+  },
+  {
+   "id": "gpt-4o-mini-tts",
+   "object": "model",
+   "created": 1742403959,
+   "owned_by": "system"
+  },
+  {
+   "id": "o4-mini",
+   "object": "model",
+   "created": 1744225351,
+   "owned_by": "system"
+  },
+  {
+   "id": "whisper-1",
+   "object": "model",
+   "created": 1677532384,
+   "owned_by": "openai-internal"
+  },
+  {
+   "id": "gpt-realtime",
+   "object": "model",
+   "created": 1756271701,
+   "owned_by": "system"
+  },
+  {
+   "id": "dall-e-3",
+   "object": "model",
+   "created": 1698785189,
+   "owned_by": "system"
+  },
+  {
+   "id": "omni-moderation-latest",
+   "object": "model",
+   "created": 1731689265,
+   "owned_by": "system"
+  },
+  {
+   "id": "gpt-3.5-turbo-instruct",
+   "object": "model",
+   "created": 1692901427,
+   "owned_by": "system"
+  }
+ ]
+}

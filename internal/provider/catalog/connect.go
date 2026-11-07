@@ -49,6 +49,10 @@ func (st Status) Summary() string {
 type Connections struct {
 	Store     *config.Credentials
 	Overrides map[string]string
+	CacheDir  string
+
+	mu  sync.Mutex
+	mem map[string][]Model
 }
 
 func (c *Connections) store() Store {

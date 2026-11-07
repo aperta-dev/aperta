@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -245,23 +246,36 @@ func TestPermissionPromptReplacesInputAndIgnoresEnter(t *testing.T) {
 }
 
 type fakeModels struct {
-	mu       sync.Mutex
-	choices  []catalog.Choice
-	missing  []string
-	switched []catalog.Choice
-	fail     error
-	conns    *catalog.Connections
+	mu        sync.Mutex
+	connected []string
+	models    map[string][]catalog.Model
+	note      string
+	switched  []catalog.Choice
+	fail      error
+	conns     *catalog.Connections
 }
 
-func (f *fakeModels) Choices(ctx context.Context) ([]catalog.Choice, []string) {
-	return f.choices, f.missing
+func (f *fakeModels) Models(ctx context.Context, name string) ([]catalog.Model, string) {
+	if f.models == nil && f.conns != nil {
+		return f.conns.Models(ctx, name)
+	}
+	return f.models[name], f.note
 }
 
 func (f *fakeModels) Statuses(ctx context.Context) []catalog.Status {
-	if f.conns == nil {
-		return nil
+	if f.conns != nil {
+		return f.conns.Statuses(ctx)
 	}
-	return f.conns.Statuses(ctx)
+	out := make([]catalog.Status, len(catalog.Providers))
+	for i, sp := range catalog.Providers {
+		out[i] = catalog.Status{Spec: sp}
+		for _, c := range f.connected {
+			if c == sp.Name {
+				out[i].Connected = true
+			}
+		}
+	}
+	return out
 }
 
 func (f *fakeModels) Probe(ctx context.Context, name string) error { return f.conns.Probe(ctx, name) }
@@ -321,8 +335,6 @@ func TestModelCommandSwitchesDirectly(t *testing.T) {
 	waitFor(t, "same-provider switch", func() bool { return strings.Contains(out.text(), "model: openai/gpt-6-astra") })
 	typeLine(p, "/model openrouter/anthropic/claude-haiku-4-5")
 	waitFor(t, "nested id", func() bool { return strings.Contains(out.text(), "model: openrouter/anthropic/claude-haiku-4-5") })
-	typeLine(p, "/model ollama")
-	waitFor(t, "no default", func() bool { return strings.Contains(out.text(), "ollama has no default model") })
 	got := models.last()
 	want := []catalog.Choice{{Provider: "openai", Model: "gpt-6-luna"}, {Provider: "openai", Model: "gpt-6-astra"}, {Provider: "openrouter", Model: "anthropic/claude-haiku-4-5"}}
 	if len(got) != len(want) {
@@ -336,57 +348,133 @@ func TestModelCommandSwitchesDirectly(t *testing.T) {
 	waitFor(t, "agent updated", func() bool {
 		return agent.Model == "anthropic/claude-haiku-4-5" && agent.Provider.Name() == "openrouter"
 	})
+	models.mu.Lock()
 	models.fail = errors.New("OPENAI_API_KEY is not set")
+	models.mu.Unlock()
 	typeLine(p, "/model openai/gpt-6-sol")
 	waitFor(t, "failed switch", func() bool { return strings.Contains(out.text(), "model: OPENAI_API_KEY is not set") })
+	typeLine(p, "/help")
+	waitFor(t, "help", func() bool { return strings.Contains(out.text(), "/model picks a model") })
+	p.Quit()
+	p.Wait()
 	if agent.Provider.Name() != "openrouter" {
 		t.Error("a failed switch changed the provider")
 	}
-	typeLine(p, "/help")
-	waitFor(t, "help", func() bool { return strings.Contains(out.text(), "/model picks a model") })
+}
+
+func pickerModels() *fakeModels {
+	return &fakeModels{connected: []string{"anthropic", "ollama"}, models: map[string][]catalog.Model{
+		"anthropic": {{ID: "claude-sonnet-5-5", Name: "Claude Sonnet 5.5"}, {ID: "claude-opus-5-5", Name: "Claude Opus 5.5"}, {ID: "claude-haiku-5-5", Name: "Claude Haiku 5.5"}},
+		"ollama":    {{ID: "qwen3-coder"}, {ID: "llama4"}},
+	}}
+}
+
+func keys(p *tea.Program, k string) {
+	switch k {
+	case "enter":
+		p.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	case "esc":
+		p.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
+	case "down":
+		p.Send(tea.KeyPressMsg{Code: tea.KeyDown})
+	case "up":
+		p.Send(tea.KeyPressMsg{Code: tea.KeyUp})
+	case "backspace":
+		p.Send(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	default:
+		for _, r := range k {
+			p.Send(tea.KeyPressMsg{Code: r, Text: string(r)})
+		}
+	}
 }
 
 func TestModelPickerKeysAndEsc(t *testing.T) {
-	models := &fakeModels{choices: []catalog.Choice{
-		{Provider: "anthropic", Model: "claude-sonnet-5-5", Note: "default"},
-		{Provider: "anthropic", Model: "claude-opus-5-5"},
-		{Provider: "ollama", Model: "qwen3-coder"},
-	}, missing: []string{"openrouter", "lmstudio"}}
+	models := pickerModels()
 	p, _, out := startModelUI(t, models)
 	m := func() string { return out.text() }
 	typeLine(p, "/model")
-	waitFor(t, "picker", func() bool { return strings.Contains(m(), "press 1-4 or ↑↓ and enter") })
-	for _, want := range []string{"1 anthropic/claude-sonnet-5-5  current, default", "2 anthropic/claude-opus-5-5", "3 ollama/qwen3-coder", "4 type a model id", "not connected: openrouter, lmstudio · /connect to add", "esc = cancel"} {
+	waitFor(t, "provider list", func() bool { return strings.Contains(m(), "press 1-2 or ↑↓ and enter") })
+	for _, want := range []string{"1 anthropic  current: claude-sonnet-5-5", "2 ollama", "not connected: openai, openrouter, lmstudio, openai-compatible · /connect to add", "esc = cancel"} {
 		if !strings.Contains(m(), want) {
 			t.Errorf("picker is missing %q:\n%s", want, m())
 		}
 	}
-	p.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
+	keys(p, "esc")
 	time.Sleep(100 * time.Millisecond)
 	if len(models.last()) != 0 {
 		t.Fatal("esc switched the model")
 	}
 	typeLine(p, "/model")
-	waitFor(t, "picker again", func() bool { return strings.Count(m(), "Switch model") >= 2 })
-	time.Sleep(50 * time.Millisecond)
-	p.Send(tea.KeyPressMsg{Code: tea.KeyDown})
-	p.Send(tea.KeyPressMsg{Code: tea.KeyDown})
-	p.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
-	waitFor(t, "arrow pick", func() bool { return strings.Contains(m(), "model: ollama/qwen3-coder") })
+	waitFor(t, "provider list again", func() bool { return strings.Count(m(), "Switch model") >= 2 })
+	keys(p, "2")
+	waitFor(t, "ollama models", func() bool {
+		return strings.Contains(m(), "Pick a model from ollama") && strings.Contains(m(), "2 models")
+	})
+	if !strings.Contains(m(), "type to filter · ↑↓ move · enter pick · esc back") {
+		t.Errorf("hints missing:\n%s", m())
+	}
+	keys(p, "down")
+	keys(p, "enter")
+	waitFor(t, "arrow pick", func() bool { return strings.Contains(m(), "model: ollama/llama4") })
+
 	typeLine(p, "/model")
-	time.Sleep(100 * time.Millisecond)
-	p.Send(tea.KeyPressMsg{Code: '3', Text: "3"})
-	waitFor(t, "number pick", func() bool { return strings.Contains(m(), "model: anthropic/claude-opus-5-5") })
+	waitFor(t, "third open", func() bool { return strings.Count(m(), "Switch model") >= 3 })
+	keys(p, "enter")
+	waitFor(t, "ollama again", func() bool { return strings.Contains(m(), "llama4  current") })
+	keys(p, "esc")
+	waitFor(t, "back to providers", func() bool { return strings.Count(m(), "Switch model") >= 4 })
+	keys(p, "1")
+	waitFor(t, "anthropic models", func() bool { return strings.Contains(m(), "Pick a model from anthropic") })
+	keys(p, "opu")
+	waitFor(t, "filtered", func() bool { return strings.Contains(m(), "filter: opu") && strings.Contains(m(), "1 of 3") })
+	keys(p, "enter")
+	waitFor(t, "filter pick", func() bool { return strings.Contains(m(), "model: anthropic/claude-opus-5-5") })
+
+	typeLine(p, "/model anthropic")
+	waitFor(t, "direct list", func() bool { return strings.Contains(m(), "esc cancel") })
+	keys(p, "zzzx")
+	keys(p, "backspace")
+	waitFor(t, "no match", func() bool { return strings.Contains(m(), "no match · enter uses \"zzz\" as the model id") })
+	keys(p, "enter")
+	waitFor(t, "typed id", func() bool { return strings.Contains(m(), "model: anthropic/zzz") })
 	got := models.last()
-	if len(got) != 2 || got[0].Model != "qwen3-coder" || got[1].Model != "claude-opus-5-5" {
+	if len(got) != 3 || got[0].Model != "llama4" || got[1].Model != "claude-opus-5-5" || got[2].Model != "zzz" {
 		t.Errorf("switched %v", got)
 	}
+}
+
+func TestModelPickerScrollsAndMarksFree(t *testing.T) {
+	var list []catalog.Model
+	for i := 0; i < 30; i++ {
+		m := catalog.Model{ID: fmt.Sprintf("vendor/model-%02d", i), Detail: "$1.00/$2.00 per 1M · 128k context"}
+		if i == 0 {
+			m.Free, m.Detail = true, "free · 32k context"
+		}
+		list = append(list, m)
+	}
+	models := &fakeModels{connected: []string{"openrouter"}, models: map[string][]catalog.Model{"openrouter": list}, note: "couldn't load openrouter models (could not reach openrouter.ai); showing the list from 3 hours ago"}
+	p, _, out := startModelUI(t, models)
 	typeLine(p, "/model")
-	time.Sleep(100 * time.Millisecond)
-	p.Send(tea.KeyPressMsg{Code: '4', Text: "4"})
-	p.Send(tea.PasteMsg{Content: "lmstudio/my-model"})
-	p.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
-	waitFor(t, "typed id", func() bool { return strings.Contains(m(), "model: lmstudio/my-model") })
+	waitFor(t, "single provider opens its list", func() bool {
+		return strings.Contains(out.text(), "Pick a model from openrouter") && strings.Contains(out.text(), "30 models")
+	})
+	view := out.text()
+	for _, want := range []string{"vendor/model-00  free · 32k context", "vendor/model-09  $1.00/$2.00 per 1M · 128k context", "↓ 20 more", "showing the list from 3 hours ago"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "vendor/model-10") {
+		t.Error("more than 10 rows shown")
+	}
+	for i := 0; i < 12; i++ {
+		keys(p, "down")
+	}
+	waitFor(t, "scrolled", func() bool {
+		return strings.Contains(out.text(), "↑ 3 more") && strings.Contains(out.text(), "↓ 17 more")
+	})
+	keys(p, "enter")
+	waitFor(t, "picked", func() bool { return strings.Contains(out.text(), "model: openrouter/vendor/model-12") })
 }
 
 func TestModelSwitchDuringTurnWaitsForNextTurn(t *testing.T) {
@@ -406,5 +494,28 @@ func TestModelSwitchDuringTurnWaitsForNextTurn(t *testing.T) {
 	<-done
 	if agent.Provider.Name() != "openai" || agent.Model != "gpt-6-luna" {
 		t.Errorf("pending switch not applied after the turn: %s/%s", agent.Provider.Name(), agent.Model)
+	}
+}
+
+func TestStartWithoutModelOpensPicker(t *testing.T) {
+	models := &fakeModels{connected: []string{"openrouter"}, models: map[string][]catalog.Model{"openrouter": {{ID: "vendor/free-one:free", Free: true, Detail: "free · 32k context"}}}}
+	agent := &core.Agent{Provider: &named{name: "openrouter"}, Tools: tool.Defaults(), Dir: t.TempDir()}
+	out := &screen{}
+	p := New(Options{Agent: agent, Version: "test", Output: out, Size: [2]int{100, 30}, Models: models})
+	go p.Run()
+	t.Cleanup(p.Kill)
+	waitFor(t, "picker at start", func() bool {
+		return strings.Contains(out.text(), "Pick a model to start.") && strings.Contains(out.text(), "> vendor/free-one:free  free")
+	})
+	if !strings.Contains(out.text(), "openrouter · no model · /model") {
+		t.Errorf("footer:\n%s", out.text())
+	}
+	keys(p, "esc")
+	typeLine(p, "hello")
+	waitFor(t, "send blocked", func() bool { return strings.Contains(out.text(), "Pick a model first, then send again.") })
+	keys(p, "enter")
+	waitFor(t, "picked", func() bool { return strings.Contains(out.text(), "model: openrouter/vendor/free-one:free") })
+	if len(agent.Messages) != 0 {
+		t.Error("a message was sent without a model")
 	}
 }

@@ -35,7 +35,7 @@ type Options struct {
 }
 
 type ModelSwitcher interface {
-	Choices(ctx context.Context) ([]catalog.Choice, []string)
+	Models(ctx context.Context, name string) ([]catalog.Model, string)
 	Switch(c catalog.Choice) (provider.Provider, error)
 	Statuses(ctx context.Context) []catalog.Status
 	Probe(ctx context.Context, name string) error
@@ -46,19 +46,15 @@ type ModelSwitcher interface {
 const help = `Enter sends. Shift+Enter, Alt+Enter or Ctrl+J adds a line.
 Esc stops the running turn. Ctrl+C stops the turn, clears the input, or quits.
 /connect adds an API key or local server. /model picks a model.
-/model <provider>/<model> or /model <model> switches directly.
+/model <provider> lists that provider's models. /model <provider>/<model> or /model <model> switches directly.
 /exit quits. Resume later with: aperta -c`
 
 type (
-	liveMsg    string
-	statusMsg  string
-	usageMsg   provider.Usage
-	doneMsg    struct{ err error }
-	choicesMsg struct {
-		list    []catalog.Choice
-		missing []string
-	}
-	askMsg struct {
+	liveMsg   string
+	statusMsg string
+	usageMsg  provider.Usage
+	doneMsg   struct{ err error }
+	askMsg    struct {
 		req   core.PermissionRequest
 		rule  string
 		reply chan core.Decision
@@ -134,8 +130,11 @@ func (m *model) Init() tea.Cmd {
 		if len(m.opts.History) > 0 {
 			lines = append(lines, dim.Render("resumed session "+m.opts.Session.ID))
 		}
-		if m.opts.Agent.Provider == nil {
+		switch {
+		case m.opts.Agent.Provider == nil:
 			lines = append(lines, warn.Render("No model provider is connected yet.")+dim.Render(" Pick one below to start."))
+		case m.opts.Agent.Model == "":
+			lines = append(lines, warn.Render("Pick a model to start."))
 		}
 		m.prog.Println(strings.Join(lines, "\n"))
 		if m.opts.Servers != nil && !m.opts.Servers.Empty() {
@@ -143,9 +142,15 @@ func (m *model) Init() tea.Cmd {
 			m.prog.Println(serverStatus(m.opts.Servers.Status()))
 		}
 	}()
-	if m.opts.Agent.Provider == nil && m.opts.Models != nil {
-		_, cmd := m.openConnect()
-		return tea.Batch(textarea.Blink, cmd)
+	if m.opts.Models != nil {
+		switch {
+		case m.opts.Agent.Provider == nil:
+			_, cmd := m.openConnect()
+			return tea.Batch(textarea.Blink, cmd)
+		case m.opts.Agent.Model == "":
+			_, cmd := m.openPicker(m.opts.Agent.Provider.Name())
+			return tea.Batch(textarea.Blink, cmd)
+		}
 	}
 	return textarea.Blink
 }
@@ -162,7 +167,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.conn != nil {
 			return m.connectPaste(msg)
 		}
-		if m.ask != nil || m.pick != nil {
+		if m.pick != nil {
+			return m.pickPaste(msg.Content)
+		}
+		if m.ask != nil {
 			return m, nil
 		}
 	case liveMsg:
@@ -177,11 +185,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case askMsg:
 		m.ask = &msg
 		return m, nil
-	case choicesMsg:
-		if m.pick != nil {
-			m.pick.load(m.current(), msg.list, msg.missing)
-		}
-		return m, nil
+	case provsMsg, modelsMsg:
+		return m.pickMsg(msg)
 	case statusesMsg, connectResultMsg:
 		return m.connectMsg(msg)
 	case doneMsg:
@@ -234,7 +239,7 @@ func (m *model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.connectKey(msg)
 	}
 	if m.pick != nil {
-		return m.pickKey(k)
+		return m.pickKey(msg)
 	}
 	switch k {
 	case "ctrl+c":
@@ -281,7 +286,11 @@ func (m *model) submit() (tea.Model, tea.Cmd) {
 		return m.openConnect()
 	}
 	if arg, ok := strings.CutPrefix(text, "/model "); ok {
-		c, err := catalog.ParseChoice(arg, m.opts.Agent.Provider.Name())
+		arg = strings.TrimSpace(arg)
+		if _, err := catalog.Lookup(strings.TrimSuffix(arg, "/")); err == nil && !strings.Contains(strings.TrimSuffix(arg, "/"), "/") {
+			return m.openPicker(strings.TrimSuffix(arg, "/"))
+		}
+		c, err := catalog.ParseChoice(arg, m.current().Provider)
 		if err != nil {
 			return m, tea.Println(errText.Render("model: " + err.Error()))
 		}
@@ -291,6 +300,11 @@ func (m *model) submit() (tea.Model, tea.Cmd) {
 		m.input.SetValue(text)
 		_, cmd := m.openConnect()
 		return m, tea.Batch(tea.Println(warn.Render("Connect a provider first, then send again.")), cmd)
+	}
+	if m.opts.Agent.Model == "" {
+		m.input.SetValue(text)
+		_, cmd := m.openPicker(m.opts.Agent.Provider.Name())
+		return m, tea.Batch(tea.Println(warn.Render("Pick a model first, then send again.")), cmd)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m.running, m.cancel, m.status = true, cancel, "working"
@@ -404,8 +418,10 @@ func (m *model) askView() string {
 
 func (m *model) footer() string {
 	parts := []string{"no model · /connect"}
-	if c := m.current(); c.Provider != "" {
+	if c := m.current(); c.Provider != "" && c.Model != "" {
 		parts[0] = c.String()
+	} else if c.Provider != "" {
+		parts[0] = c.Provider + " · no model · /model"
 	}
 	if m.opts.Session != nil {
 		parts = append(parts, m.opts.Session.ID)

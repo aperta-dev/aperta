@@ -1,0 +1,184 @@
+package catalog
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+func fixture(t *testing.T, name string) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func ids(list []Model) string {
+	var out []string
+	for _, m := range list {
+		out = append(out, m.ID)
+	}
+	return strings.Join(out, " ")
+}
+
+func TestParseOpenRouterKeepsOnlyToolModels(t *testing.T) {
+	list, err := ParseOpenRouter(fixture(t, "openrouter.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := ids(list), "liquid/lfm-3-1.7b:free anthropic/claude-sonnet-5-5 liquid/lfm-3-1.7b openrouter/auto"; got != want {
+		t.Fatalf("ids = %s, want %s", got, want)
+	}
+	details := []string{"free · 262k context", "$3.00/$15 per 1M · 1M context", "$0.08/$0.20 per 1M · 262k context", "variable price · 2M context"}
+	for i, want := range details {
+		if list[i].Detail != want {
+			t.Errorf("%s detail = %q, want %q", list[i].ID, list[i].Detail, want)
+		}
+	}
+	if !list[0].Free || list[1].Free || list[3].Free {
+		t.Error("free flag wrong")
+	}
+	if list[1].Name != "Anthropic: Claude Sonnet 5.5" {
+		t.Errorf("name = %q", list[1].Name)
+	}
+}
+
+func TestParseOpenAIKeepsChatModelsNewestFirst(t *testing.T) {
+	list, err := ParseOpenAI(fixture(t, "openai.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := ids(list), "gpt-6-luna gpt-6-sol o4-mini"; got != want {
+		t.Fatalf("ids = %s, want %s", got, want)
+	}
+}
+
+func TestParseCompatible(t *testing.T) {
+	list, err := ParseCompatible(fixture(t, "ollama.json"))
+	if err != nil || ids(list) != "qwen3-coder:30b llama4:latest" {
+		t.Fatalf("%s %v", ids(list), err)
+	}
+	if _, err := ParseCompatible([]byte("<html>")); err == nil {
+		t.Error("bad JSON accepted")
+	}
+}
+
+func TestFetchAnthropicFollowsPages(t *testing.T) {
+	var calls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.URL.RawQuery)
+		if r.Header.Get("x-api-key") != "k" || r.Header.Get("anthropic-version") == "" || r.URL.Path != "/v1/models" {
+			w.WriteHeader(401)
+			return
+		}
+		if r.URL.Query().Get("after_id") == "claude-sonnet-5-5" {
+			w.Write(fixture(t, "anthropic-page2.json"))
+			return
+		}
+		w.Write(fixture(t, "anthropic-page1.json"))
+	}))
+	defer srv.Close()
+	spec, _ := Lookup("anthropic")
+	list, err := FetchModels(context.Background(), spec, srv.URL, "k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids(list) != "claude-opus-5-5 claude-sonnet-5-5 claude-haiku-5-5" || len(calls) != 2 {
+		t.Fatalf("ids = %s, calls = %v", ids(list), calls)
+	}
+	if list[2].Detail != "Claude Haiku 5.5 · 200k context" {
+		t.Errorf("detail = %q", list[2].Detail)
+	}
+}
+
+func TestFilter(t *testing.T) {
+	list := []Model{
+		{ID: "anthropic/claude-sonnet-5-5", Name: "Anthropic: Claude Sonnet 5.5"},
+		{ID: "moonshotai/kimi-k3", Name: "MoonshotAI: Kimi K3"},
+		{ID: "openai/gpt-6-luna", Name: "OpenAI: GPT-6 Luna"},
+		{ID: "x/kimi-clone", Name: "Clone"},
+		{ID: "deepseek/deepseek-v4", Name: "DeepSeek V4 Coder"},
+	}
+	cases := map[string]string{
+		"":       ids(list),
+		"kimi":   "moonshotai/kimi-k3 x/kimi-clone",
+		"KIMI":   "moonshotai/kimi-k3 x/kimi-clone",
+		"openai": "openai/gpt-6-luna",
+		"luna":   "openai/gpt-6-luna",
+		"coder":  "deepseek/deepseek-v4",
+		"cs55":   "anthropic/claude-sonnet-5-5",
+		"zzz":    "",
+	}
+	for q, want := range cases {
+		if got := ids(Filter(list, q)); got != want {
+			t.Errorf("Filter(%q) = %q, want %q", q, got, want)
+		}
+	}
+}
+
+func TestModelsCacheAndFallback(t *testing.T) {
+	var hits atomic.Int32
+	var fail atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if fail.Load() {
+			w.WriteHeader(503)
+			return
+		}
+		w.Write(fixture(t, "openrouter.json"))
+	}))
+	defer srv.Close()
+	t.Setenv("OPENROUTER_API_KEY", "")
+	t.Setenv("OPENROUTER_BASE_URL", "")
+	dir := t.TempDir()
+	conns := func() *Connections {
+		return &Connections{Overrides: map[string]string{"openrouter": srv.URL + "/api/v1"}, CacheDir: dir}
+	}
+	c := conns()
+	list, note := c.Models(context.Background(), "openrouter")
+	if len(list) != 4 || note != "" || hits.Load() != 1 {
+		t.Fatalf("first load: %d models, note %q, %d hits", len(list), note, hits.Load())
+	}
+	c.Models(context.Background(), "openrouter")
+	if hits.Load() != 1 {
+		t.Error("memory cache not used")
+	}
+	path := filepath.Join(dir, "models-openrouter.json")
+	if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("cache file: %v %v", fi, err)
+	}
+	list, _ = conns().Models(context.Background(), "openrouter")
+	if len(list) != 4 || hits.Load() != 1 {
+		t.Errorf("fresh disk cache not used: %d hits", hits.Load())
+	}
+	raw, _ := os.ReadFile(path)
+	var mc modelCache
+	json.Unmarshal(raw, &mc)
+	mc.FetchedAt = time.Now().Add(-30 * time.Hour)
+	raw, _ = json.Marshal(mc)
+	os.WriteFile(path, raw, 0o600)
+	fail.Store(true)
+	list, note = conns().Models(context.Background(), "openrouter")
+	if len(list) != 4 || hits.Load() != 2 || !strings.Contains(note, "answered 503") || !strings.Contains(note, "showing the list from 30 hours ago") {
+		t.Errorf("stale cache fallback: %d models, %d hits, note %q", len(list), hits.Load(), note)
+	}
+	os.Remove(path)
+	list, note = conns().Models(context.Background(), "openrouter")
+	if ids(list) != "anthropic/claude-sonnet-5-5" || !strings.Contains(note, "type a model id") {
+		t.Errorf("no-cache fallback: %s, note %q", ids(list), note)
+	}
+	fail.Store(false)
+	list, _ = conns().Models(context.Background(), "openrouter")
+	if len(list) != 4 {
+		t.Errorf("recovered fetch: %d", len(list))
+	}
+}

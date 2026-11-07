@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"gitlab.com/aperta/aperta/internal/config"
@@ -158,25 +157,6 @@ func (c Choice) String() string { return c.Provider + "/" + c.Model }
 
 const probeTimeout = 700 * time.Millisecond
 
-func (s Spec) Usable(ctx context.Context, baseOverride string, store Store) (bool, []string) {
-	key, _ := s.Key(store)
-	switch {
-	case s.KeyRequired:
-		return key != "", s.Models
-	case s.Kind == KindChat:
-		base := s.Base(baseOverride, store)
-		if base == "" {
-			return false, nil
-		}
-		models, err := listModels(ctx, base, key)
-		if err != nil && s.Local {
-			return false, nil
-		}
-		return true, models
-	}
-	return true, s.Models
-}
-
 func listModels(ctx context.Context, base, key string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
@@ -210,43 +190,6 @@ func listModels(ctx context.Context, base, key string) ([]string, error) {
 		}
 	}
 	return out, nil
-}
-
-func Available(ctx context.Context, baseOverrides map[string]string, store Store, perProvider int) ([]Choice, []string) {
-	results := make([][]Choice, len(Providers))
-	usable := make([]bool, len(Providers))
-	var wg sync.WaitGroup
-	for i, s := range Providers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			ok, models := s.Usable(ctx, baseOverrides[s.Name], store)
-			if !ok {
-				return
-			}
-			usable[i] = true
-			if len(models) > perProvider {
-				models = models[:perProvider]
-			}
-			for _, m := range models {
-				note := ""
-				if m == s.DefaultModel {
-					note = "default"
-				}
-				results[i] = append(results[i], Choice{Provider: s.Name, Model: m, Note: note})
-			}
-		}()
-	}
-	wg.Wait()
-	var out []Choice
-	var missing []string
-	for i, r := range results {
-		out = append(out, r...)
-		if !usable[i] {
-			missing = append(missing, Providers[i].Name)
-		}
-	}
-	return out, missing
 }
 
 func ParseChoice(arg, current string) (Choice, error) {

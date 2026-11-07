@@ -53,6 +53,7 @@ A CLA, not a DCO: relicensing and commercial use need a license grant to the lic
 - v0.3: OpenAI Responses, OpenAI-compatible providers (OpenRouter, Ollama, LM Studio, any server) and MCP over stdio and HTTP.
 - After v0.3: `/model` to switch model mid-session, remembered per project.
 - After v0.3: `/connect` and `aperta connect` to add API keys from inside Aperta.
+- After v0.3: `/model` lists each provider's live models, filtered as you type. Checked against the real OpenRouter API.
 
 v0.1 and v0.2 were tested by hand against the real Anthropic API. v0.3 passes its tests against fake OpenAI, Chat Completions and MCP servers; it has not run against the real OpenAI API or a local model yet.
 

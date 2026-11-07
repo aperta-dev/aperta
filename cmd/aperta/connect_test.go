@@ -112,8 +112,8 @@ func TestConnectCommand(t *testing.T) {
 		t.Errorf("saved key not used: %q", got)
 	}
 	_, firstRunErr, code := runIn(t, env, "", "run", "--cwd", dir, "hello")
-	if code == 0 || !strings.Contains(firstRunErr, "no provider is connected yet: run aperta connect") {
-		t.Errorf("openrouter has no default model, so a plain run should ask to connect: %d %q", code, firstRunErr)
+	if code == 0 || !strings.Contains(firstRunErr, "openrouter is connected but has no default model; pass --model for openrouter") {
+		t.Errorf("openrouter has no default model, so a plain run should ask for --model: %d %q", code, firstRunErr)
 	}
 
 	envWins := append(append([]string(nil), env...), "OPENROUTER_API_KEY="+envKey)

@@ -21,7 +21,9 @@ type keyCatcher struct {
 	keys []string
 }
 
-func (k *keyCatcher) Choices(ctx context.Context) ([]catalog.Choice, []string) { return nil, nil }
+func (k *keyCatcher) Models(ctx context.Context, name string) ([]catalog.Model, string) {
+	return nil, ""
+}
 func (k *keyCatcher) Switch(c catalog.Choice) (provider.Provider, error) {
 	return &named{name: c.Provider}, nil
 }

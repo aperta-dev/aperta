@@ -43,7 +43,7 @@ aperta --provider openai-compatible --base-url http://host:8000/v1 --model <mode
 aperta -c --provider openai                                    # continue a session with another model
 ```
 
-In the terminal UI, `/model` opens a picker of the providers that are set up right now (key set, or a local server that answers). `/model openai/gpt-6-luna` or `/model gpt-6-astra` (same provider) switches directly; an OpenRouter id keeps its own slash: `/model openrouter/anthropic/claude-sonnet-5-5`. The switch keeps the conversation, applies from the next turn, is saved in the session, and becomes this project's default for new sessions. `--provider` and `--model` still win.
+In the terminal UI, `/model` lists your connected providers and then that provider's live model list; type to filter, arrows to move, Enter to pick. OpenRouter shows only models that can use tools, with their price or "free". `/model openrouter` opens that list directly, and `/model openai/gpt-6-luna` or `/model gpt-6-astra` (same provider) switches straight away. The switch keeps the conversation, applies from the next turn, is saved in the session, and becomes this project's default for new sessions. `--provider` and `--model` still win.
 
 MCP servers:
 

@@ -1,0 +1,76 @@
+{
+ "data": [
+  {
+   "id": "liquid/lfm-3-1.7b:free",
+   "name": "LiquidAI: LFM3-1.7B (free)",
+   "context_length": 262144,
+   "pricing": {
+    "prompt": "0",
+    "completion": "0"
+   },
+   "supported_parameters": [
+    "max_tokens",
+    "tools",
+    "tool_choice"
+   ]
+  },
+  {
+   "id": "anthropic/claude-sonnet-5-5",
+   "name": "Anthropic: Claude Sonnet 5.5",
+   "context_length": 1000000,
+   "pricing": {
+    "prompt": "0.000003",
+    "completion": "0.000015"
+   },
+   "supported_parameters": [
+    "tools",
+    "reasoning"
+   ]
+  },
+  {
+   "id": "liquid/lfm-3-1.7b",
+   "name": "LiquidAI: LFM3-1.7B",
+   "context_length": 262144,
+   "pricing": {
+    "prompt": "0.00000008",
+    "completion": "0.0000002"
+   },
+   "supported_parameters": [
+    "tools"
+   ]
+  },
+  {
+   "id": "openrouter/auto",
+   "name": "Auto Router",
+   "context_length": 2000000,
+   "pricing": {
+    "prompt": "-1",
+    "completion": "-1"
+   },
+   "supported_parameters": [
+    "tools"
+   ]
+  },
+  {
+   "id": "sao10k/l3-euryale-70b",
+   "name": "Sao10k: Llama 3 Euryale 70B",
+   "context_length": 8192,
+   "pricing": {
+    "prompt": "0.0000015",
+    "completion": "0.0000015"
+   },
+   "supported_parameters": [
+    "temperature",
+    "top_p"
+   ]
+  },
+  {
+   "id": "mystery/no-params",
+   "name": "No params",
+   "pricing": {
+    "prompt": "0",
+    "completion": "0"
+   }
+  }
+ ]
+}

@@ -257,7 +257,7 @@ func setup(o *options, stderr io.Writer) (*app, error) {
 		Recorder:    sess,
 		Messages:    history,
 	}
-	conns := &catalog.Connections{Store: o.creds, Overrides: map[string]string{}}
+	conns := &catalog.Connections{Store: o.creds, Overrides: map[string]string{}, CacheDir: filepath.Join(session.Home(), "cache")}
 	if o.baseURL != "" {
 		conns.Overrides[o.provider] = o.baseURL
 	}
@@ -339,14 +339,32 @@ func pickStartProvider(o *options, workDir string, stderr io.Writer) error {
 	if !errors.Is(err, catalog.ErrNotConnected) {
 		return err
 	}
+	var noDefault *catalog.Spec
 	for _, spec := range catalog.Providers {
-		if !spec.KeyRequired || spec.DefaultModel == "" {
+		if !spec.KeyRequired {
 			continue
 		}
-		if key, _ := spec.Key(o.creds); key != "" {
+		if key, _ := spec.Key(o.creds); key == "" {
+			continue
+		}
+		if spec.DefaultModel != "" {
 			o.provider, o.model = "", ""
 			return chooseProvider(o, spec.Name, spec.DefaultModel)
 		}
+		if noDefault == nil {
+			noDefault = &spec
+		}
+	}
+	if noDefault != nil {
+		if !o.interactive {
+			return fmt.Errorf("%s is connected but has no default model; %s", noDefault.Name, noDefault.ModelHint())
+		}
+		prov, err := noDefault.New(catalog.Options{BaseURL: o.baseURL, UserAgent: "aperta/" + version, MaxRetries: 4, Store: o.store()})
+		if err != nil {
+			return err
+		}
+		o.prov, o.provider, o.model = prov, noDefault.Name, ""
+		return nil
 	}
 	return &catalog.NotConnectedError{Reason: "no provider is connected yet: run aperta connect, or set ANTHROPIC_API_KEY or OPENAI_API_KEY"}
 }
