@@ -21,8 +21,7 @@ func TestEveryGoFileHasTheLicenseLine(t *testing.T) {
 			return err
 		}
 		if d.IsDir() {
-			switch d.Name() {
-			case ".git", ".empryo", "testdata", "node_modules":
+			if path != root && (strings.HasPrefix(d.Name(), ".") || d.Name() == "testdata" || d.Name() == "node_modules") {
 				return filepath.SkipDir
 			}
 			return nil
