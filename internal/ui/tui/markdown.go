@@ -172,3 +172,23 @@ func wrapLines(s string, width int) string {
 	}
 	return strings.Join(lines, "\n")
 }
+
+var markerOnly = regexp.MustCompile("^[#*_\\-+>`~\\s]*$")
+
+func (md markdown) partial(l string, width int) string {
+	trimmed := strings.TrimSpace(l)
+	if md.fence != "" {
+		if trimmed != "" && strings.HasPrefix(md.fence, strings.TrimRight(trimmed, " ")[:min(len(trimmed), 3)]) && strings.Trim(trimmed, md.fence[:1]) == "" {
+			return ""
+		}
+		return md.line(l, width)
+	}
+	if trimmed == "" || markerOnly.MatchString(trimmed) || fenceRe.MatchString(l) {
+		return ""
+	}
+	out := md.line(l, width)
+	for _, mark := range []string{"**", "__", "`"} {
+		out = strings.ReplaceAll(out, mark, "")
+	}
+	return out
+}

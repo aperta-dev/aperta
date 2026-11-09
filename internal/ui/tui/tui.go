@@ -452,7 +452,7 @@ func (s *stream) handle(ev core.Event) {
 			s.text(s.live[:i])
 			s.live = s.live[i+1:]
 		}
-		s.p.Send(liveMsg(s.live))
+		s.p.Send(liveMsg(s.md.partial(s.live, s.width())))
 		s.p.Send(statusMsg("writing"))
 	case core.EventToolCall:
 		s.flush()

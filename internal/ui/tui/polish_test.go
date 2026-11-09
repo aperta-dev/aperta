@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -89,8 +90,11 @@ func TestStreamRendersMarkdownAcrossDeltas(t *testing.T) {
 	t.Cleanup(p.Kill)
 	waitFor(t, "start", func() bool { return strings.Contains(out.text(), "Aperta test") })
 	s := &stream{p: p, inputs: map[string]json.RawMessage{}, cols: newCols(60)}
-	for _, d := range []string{"## Ti", "tle\n\n- one **b", "old**\n```\nco", "de\n```\nend"} {
+	for _, d := range []string{"## Ti", "tle\n\n- one **b", "old**\n```\nco", "de\n```\nend", "\n``", "`go\n"} {
+		before := len(out.text())
 		s.handle(core.Event{Type: core.EventMessageDelta, Kind: provider.DeltaText, Text: d})
+		waitFor(t, "a paint after "+strconv.Quote(d), func() bool { return len(out.text()) > before })
+		time.Sleep(30 * time.Millisecond)
 	}
 	s.handle(core.Event{Type: core.EventDone})
 	waitFor(t, "rendered", func() bool {
@@ -101,6 +105,9 @@ func TestStreamRendersMarkdownAcrossDeltas(t *testing.T) {
 	for i, l := range lines {
 		if strings.TrimSpace(l) == "Title" {
 			j := i + 1
+			for j < len(lines) && strings.TrimSpace(lines[j]) == "• one b" {
+				lines = append(lines[:j], lines[j+1:]...)
+			}
 			for j < len(lines) && strings.TrimSpace(lines[j]) == "" {
 				j++
 			}
@@ -328,5 +335,34 @@ func TestBatchThreeDetails(t *testing.T) {
 		if strings.HasPrefix(l, " ") && !strings.HasPrefix(l, strings.Repeat(" ", 14)) {
 			t.Errorf("help continuation not aligned: %q", l)
 		}
+	}
+}
+
+func TestPartialLine(t *testing.T) {
+	cases := map[string]string{
+		"## Ti":          "Ti",
+		"##":             "",
+		"- one **b":      "• one b",
+		"- one **bo** x": "• one bo x",
+		"use `co":        "use co",
+		"``":             "",
+		"```go":          "",
+		"---":            "",
+		"plain text":     "plain text",
+	}
+	for in, want := range cases {
+		if got := plain(markdown{}.partial(in, 60)); got != want {
+			t.Errorf("partial(%q) = %q, want %q", in, got, want)
+		}
+	}
+	md := markdown{fence: "```"}
+	if got := plain(md.partial("x := **y**", 60)); got != "  │ x := **y**" {
+		t.Errorf("code line changed: %q", got)
+	}
+	if got := md.partial("``", 60); got != "" {
+		t.Errorf("partial closing fence shown: %q", got)
+	}
+	if md.fence != "```" {
+		t.Error("partial changed the fence state")
 	}
 }
