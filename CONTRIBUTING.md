@@ -18,4 +18,4 @@ Contributions are released under [FSL-1.1-ALv2](LICENSE.md), like the rest of th
 
 ## Clean room
 
-Write code from scratch. Do not copy code from other agent harnesses. Add every new dependency to [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) with its license; only MIT, Apache-2.0, BSD and ISC are allowed.
+Write code from scratch. Do not copy code from other agent harnesses. New source files start with the line `// SPDX-License-Identifier: FSL-1.1-ALv2` followed by a blank line. Add every new dependency to [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) with its license; only MIT, Apache-2.0, BSD and ISC are allowed.
