@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -58,7 +59,7 @@ func TestEditRefusesAmbiguousOrMissingText(t *testing.T) {
 	}
 	got, _ := os.ReadFile(p)
 	info, _ := os.Stat(p)
-	if string(got) != "b x b\n" || info.Mode().Perm() != 0o600 {
+	if string(got) != "b x b\n" || runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Errorf("after replace_all: %q mode %v", got, info.Mode().Perm())
 	}
 }

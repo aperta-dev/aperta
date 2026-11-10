@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -150,10 +151,10 @@ func TestConnectSavesOnlyAValidatedKey(t *testing.T) {
 	if err != nil || !strings.Contains(string(raw), goodKey) {
 		t.Fatalf("key not saved: %q %v", raw, err)
 	}
-	if fi, _ := os.Stat(path); fi.Mode().Perm() != 0o600 {
+	if fi, _ := os.Stat(path); runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
 		t.Errorf("credentials mode = %v, want 0600", fi.Mode().Perm())
 	}
-	if fi, _ := os.Stat(filepath.Dir(path)); fi.Mode().Perm() != 0o700 {
+	if fi, _ := os.Stat(filepath.Dir(path)); runtime.GOOS != "windows" && fi.Mode().Perm() != 0o700 {
 		t.Errorf("credentials dir mode = %v, want 0700", fi.Mode().Perm())
 	}
 	press(p, "esc")

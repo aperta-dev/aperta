@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -29,6 +30,9 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	binary = filepath.Join(dir, "aperta")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
 	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
 		panic(string(out))
 	}

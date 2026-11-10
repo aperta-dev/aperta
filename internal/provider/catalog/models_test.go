@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -204,7 +205,7 @@ func TestModelsCacheAndFallback(t *testing.T) {
 		t.Error("memory cache not used")
 	}
 	path := filepath.Join(dir, "models-openrouter.json")
-	if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o600 {
+	if fi, err := os.Stat(path); err != nil || runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
 		t.Fatalf("cache file: %v %v", fi, err)
 	}
 	list, _ = conns().Models(context.Background(), "openrouter")

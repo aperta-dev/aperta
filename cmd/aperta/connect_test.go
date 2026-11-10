@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -95,10 +96,10 @@ func TestConnectCommand(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "connected openrouter (key sk-or-…SAVE)") {
 		t.Fatalf("good key: %d %q %q", code, out, errOut)
 	}
-	if fi, err := os.Stat(creds); err != nil || fi.Mode().Perm() != 0o600 {
+	if fi, err := os.Stat(creds); err != nil || runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
 		t.Fatalf("credentials file: %v %v", fi, err)
 	}
-	if fi, _ := os.Stat(home); fi.Mode().Perm() != 0o700 {
+	if fi, _ := os.Stat(home); runtime.GOOS != "windows" && fi.Mode().Perm() != 0o700 {
 		t.Errorf("home mode = %v, want 0700", fi.Mode().Perm())
 	}
 
