@@ -21,15 +21,14 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/charmbracelet/x/vt"
 	"github.com/creack/pty"
 
-	"gitlab.com/aperta-dev/aperta/internal/config"
-	"gitlab.com/aperta-dev/aperta/internal/provider/anthropic"
-	"gitlab.com/aperta-dev/aperta/internal/provider/transport"
+	"github.com/aperta-dev/aperta/internal/config"
+	"github.com/aperta-dev/aperta/internal/provider/anthropic"
+	"github.com/aperta-dev/aperta/internal/provider/transport"
 )
 
 const (
@@ -63,7 +62,7 @@ func killAll() {
 	defer procMu.Unlock()
 	for _, c := range procs {
 		if c.Process != nil && c.ProcessState == nil {
-			syscall.Kill(-c.Process.Pid, syscall.SIGKILL)
+			killGroup(c.Process.Pid)
 			c.Process.Kill()
 		}
 	}
@@ -482,7 +481,7 @@ func (t *term) quit() error {
 }
 
 func (t *term) close() {
-	syscall.Kill(-t.cmd.Process.Pid, syscall.SIGKILL)
+	killGroup(t.cmd.Process.Pid)
 	t.f.Close()
 }
 
@@ -701,7 +700,7 @@ func headless(dir, home string, env []string, args ...string) ([]event, string, 
 	cmd := exec.Command(binary, append([]string{"run", "--json"}, args...)...)
 	cmd.Dir = dir
 	cmd.Env = baseEnv(home, env...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	ownGroup(cmd)
 	var stderr, stdout strings.Builder
 	cmd.Stderr, cmd.Stdout = &stderr, &stdout
 	waitOutput := func(c *exec.Cmd) (string, error) {
@@ -716,7 +715,7 @@ func headless(dir, home string, env []string, args ...string) ([]event, string, 
 	track(cmd)
 	timer := time.AfterFunc(limit, func() {
 		timedOut.Store(true)
-		syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		killGroup(cmd.Process.Pid)
 	})
 	defer timer.Stop()
 	out, err := waitOutput(cmd)

@@ -10,7 +10,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"gitlab.com/aperta-dev/aperta/internal/provider"
+	"github.com/aperta-dev/aperta/internal/provider"
 )
 
 type Write struct{}

@@ -5,7 +5,7 @@ package core
 import (
 	"encoding/json"
 
-	"gitlab.com/aperta-dev/aperta/internal/provider"
+	"github.com/aperta-dev/aperta/internal/provider"
 )
 
 type EventType string

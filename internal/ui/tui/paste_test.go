@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"gitlab.com/aperta-dev/aperta/internal/core"
-	"gitlab.com/aperta-dev/aperta/internal/provider"
-	"gitlab.com/aperta-dev/aperta/internal/provider/catalog"
-	"gitlab.com/aperta-dev/aperta/internal/tool"
+	"github.com/aperta-dev/aperta/internal/core"
+	"github.com/aperta-dev/aperta/internal/provider"
+	"github.com/aperta-dev/aperta/internal/provider/catalog"
+	"github.com/aperta-dev/aperta/internal/tool"
 )
 
 const realKey = "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"

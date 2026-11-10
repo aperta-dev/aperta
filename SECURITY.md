@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-Please report it privately, not in a public issue: open a confidential issue at https://gitlab.com/aperta-dev/aperta/-/issues/new (tick "This issue is confidential").
+Please report it privately, not in a public issue: use GitHub private vulnerability reporting at https://github.com/aperta-dev/aperta/security/advisories/new.
 
 Include what you found, how to reproduce it, and the `aperta version` output. You will get a reply within a few days.
 

@@ -77,7 +77,7 @@ Before adding a library, check its current docs and versions; don't pick from me
 
 ## v0.1 notes
 
-- Module path: `gitlab.com/aperta-dev/aperta`. Go 1.27.
+- Module path: `github.com/aperta-dev/aperta`. Go 1.27.
 - Anthropic: API version `2026-10-21`, streaming only, automatic prompt caching (top-level `cache_control`). Thinking blocks go back to the API unchanged, with their signatures. No `temperature`, `top_p` or `top_k` (removed in that API version). Default model `claude-sonnet-5-5`.
 - Retries: connection errors, 408, 409, 429 and 5xx (including 529), up to 4 times, honouring `retry-after` and `x-should-retry`. A stream is only retried if no text reached the user yet. A stream with no data for 5 minutes is dropped and retried.
 - Tests: `cmd/aperta/e2e_test.go` builds the real binary and runs it against a fake Messages API that streams split events, a 529 retry, thinking and tool calls. `internal/tool/tool_test.go` covers glob matching, edit errors and shell limits.

@@ -8,7 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"gitlab.com/aperta-dev/aperta/internal/provider/catalog"
+	"github.com/aperta-dev/aperta/internal/provider/catalog"
 )
 
 type field struct {

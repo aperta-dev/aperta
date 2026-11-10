@@ -19,8 +19,8 @@ import (
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"gitlab.com/aperta-dev/aperta/internal/provider"
-	"gitlab.com/aperta-dev/aperta/internal/tool"
+	"github.com/aperta-dev/aperta/internal/provider"
+	"github.com/aperta-dev/aperta/internal/tool"
 )
 
 const (

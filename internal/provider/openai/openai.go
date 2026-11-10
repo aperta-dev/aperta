@@ -5,7 +5,7 @@ package openai
 import (
 	"net/http"
 
-	"gitlab.com/aperta-dev/aperta/internal/provider/transport"
+	"github.com/aperta-dev/aperta/internal/provider/transport"
 )
 
 const DefaultBaseURL = "https://api.openai.com/v1"

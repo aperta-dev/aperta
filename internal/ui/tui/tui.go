@@ -20,11 +20,11 @@ import (
 	"charm.land/lipgloss/v2"
 	xansi "github.com/charmbracelet/x/ansi"
 
-	"gitlab.com/aperta-dev/aperta/internal/core"
-	"gitlab.com/aperta-dev/aperta/internal/provider"
-	"gitlab.com/aperta-dev/aperta/internal/provider/catalog"
-	"gitlab.com/aperta-dev/aperta/internal/session"
-	"gitlab.com/aperta-dev/aperta/internal/tool/mcp"
+	"github.com/aperta-dev/aperta/internal/core"
+	"github.com/aperta-dev/aperta/internal/provider"
+	"github.com/aperta-dev/aperta/internal/provider/catalog"
+	"github.com/aperta-dev/aperta/internal/session"
+	"github.com/aperta-dev/aperta/internal/tool/mcp"
 )
 
 type Options struct {

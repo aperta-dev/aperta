@@ -17,8 +17,8 @@ import (
 	"strings"
 	"time"
 
-	"gitlab.com/aperta-dev/aperta/internal/provider/anthropic"
-	"gitlab.com/aperta-dev/aperta/internal/provider/transport"
+	"github.com/aperta-dev/aperta/internal/provider/anthropic"
+	"github.com/aperta-dev/aperta/internal/provider/transport"
 )
 
 const (

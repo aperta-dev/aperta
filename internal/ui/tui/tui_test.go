@@ -19,10 +19,10 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"gitlab.com/aperta-dev/aperta/internal/core"
-	"gitlab.com/aperta-dev/aperta/internal/provider"
-	"gitlab.com/aperta-dev/aperta/internal/provider/catalog"
-	"gitlab.com/aperta-dev/aperta/internal/tool"
+	"github.com/aperta-dev/aperta/internal/core"
+	"github.com/aperta-dev/aperta/internal/provider"
+	"github.com/aperta-dev/aperta/internal/provider/catalog"
+	"github.com/aperta-dev/aperta/internal/tool"
 )
 
 type scripted struct {

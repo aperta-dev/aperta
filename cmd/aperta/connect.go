@@ -15,7 +15,7 @@ import (
 
 	"github.com/charmbracelet/x/term"
 
-	"gitlab.com/aperta-dev/aperta/internal/provider/catalog"
+	"github.com/aperta-dev/aperta/internal/provider/catalog"
 )
 
 const connectUsage = `Connect Aperta to a model provider. Keys are saved in ~/.aperta/credentials.json

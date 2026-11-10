@@ -12,7 +12,7 @@ import (
 	"os"
 	"strings"
 
-	"gitlab.com/aperta-dev/aperta/internal/provider"
+	"github.com/aperta-dev/aperta/internal/provider"
 )
 
 const (

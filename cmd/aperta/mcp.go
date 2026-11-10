@@ -12,8 +12,8 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"gitlab.com/aperta-dev/aperta/internal/session"
-	"gitlab.com/aperta-dev/aperta/internal/tool/mcp"
+	"github.com/aperta-dev/aperta/internal/session"
+	"github.com/aperta-dev/aperta/internal/tool/mcp"
 )
 
 const mcpUsage = `Manage MCP servers. They are saved in ~/.aperta/mcp.json and load in every project.

@@ -11,10 +11,12 @@ Aperta reads, edits and runs code in your project through a small set of tools, 
 Needs Go 1.27 or later.
 
 ```sh
-git clone https://gitlab.com/aperta-dev/aperta.git
+git clone https://github.com/aperta-dev/aperta.git
 cd aperta
 make build
 ```
+
+Or install it with `go install github.com/aperta-dev/aperta/cmd/aperta@latest`.
 
 ## Quickstart
 
@@ -37,4 +39,4 @@ aperta run "explain this project"   # one task, no UI
 [FSL-1.1-ALv2](LICENSE.md): free to use, modify and self-host, including at work, but not to offer as a competing product or service.
 Each release becomes Apache 2.0 two years after it ships.
 
-Development happens on GitLab; GitHub is a read-only mirror. Made by CJ (Colin Jaxon).
+Issues and pull requests: [github.com/aperta-dev/aperta](https://github.com/aperta-dev/aperta). Made by CJ (Colin Jaxon).

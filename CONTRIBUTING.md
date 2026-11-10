@@ -1,10 +1,10 @@
 # Contributing
 
-Thanks for helping. Issues and merge requests live on GitLab; the GitHub copy is a read-only mirror.
+Thanks for helping. Issues and pull requests live on GitHub at https://github.com/aperta-dev/aperta.
 
 ## Contributor License Agreement
 
-Every merge request must tick the CLA box in the template. By ticking it, you agree to the following:
+Every pull request must tick the CLA box in the template. By ticking it, you agree to the following:
 
 1. **Your work.** You wrote the contribution, or have the right to submit it, and it does not knowingly infringe anyone else's rights.
 2. **License grant.** You grant the licensor named in [LICENSE.md](LICENSE.md) a perpetual, worldwide, non-exclusive, royalty-free, irrevocable license to use, copy, modify, distribute, sublicense and relicense your contribution, under any terms, including commercial ones.

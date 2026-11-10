@@ -48,12 +48,12 @@ Why:
 
 ## Contributors
 
-A CLA, not a DCO: relicensing and commercial use need a license grant to the licensor. On GitLab it lives in [CONTRIBUTING.md](../CONTRIBUTING.md) plus a checkbox in the merge request template (`.gitlab/merge_request_templates/Default.md`).
+A CLA, not a DCO: relicensing and commercial use need a license grant to the licensor. It lives in [CONTRIBUTING.md](../CONTRIBUTING.md) plus a checkbox in the pull request template (`.github/pull_request_template.md`).
 
 ## Hosting
 
-- GitLab is the main repo, under the group `aperta-dev` (`aperta` was taken).
-- A read-only push mirror goes to GitHub (e.g. `apertahq/aperta`). Its README points to GitLab for issues and merge requests.
+- GitHub is the main repo: github.com/aperta-dev/aperta. Issues, pull requests and CI live there.
+- The project started on GitLab (group `aperta-dev`); that copy is being retired.
 
 ## Clean room
 

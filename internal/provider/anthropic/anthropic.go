@@ -10,8 +10,8 @@ import (
 	"net/http"
 	"strings"
 
-	"gitlab.com/aperta-dev/aperta/internal/provider"
-	"gitlab.com/aperta-dev/aperta/internal/provider/transport"
+	"github.com/aperta-dev/aperta/internal/provider"
+	"github.com/aperta-dev/aperta/internal/provider/transport"
 )
 
 const (

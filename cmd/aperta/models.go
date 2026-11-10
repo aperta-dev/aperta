@@ -5,10 +5,10 @@ package main
 import (
 	"context"
 
-	"gitlab.com/aperta-dev/aperta/internal/config"
-	"gitlab.com/aperta-dev/aperta/internal/provider"
-	"gitlab.com/aperta-dev/aperta/internal/provider/catalog"
-	"gitlab.com/aperta-dev/aperta/internal/session"
+	"github.com/aperta-dev/aperta/internal/config"
+	"github.com/aperta-dev/aperta/internal/provider"
+	"github.com/aperta-dev/aperta/internal/provider/catalog"
+	"github.com/aperta-dev/aperta/internal/session"
 )
 
 type switcher struct {

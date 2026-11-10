@@ -1,4 +1,4 @@
-module gitlab.com/aperta-dev/aperta
+module github.com/aperta-dev/aperta
 
 go 1.27
 

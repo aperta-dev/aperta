@@ -1,3 +1,8 @@
+---
+name: Bug
+about: Something in Aperta does not work as expected
+---
+
 ## What happened
 
 ## What you expected
