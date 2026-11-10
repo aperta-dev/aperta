@@ -18,7 +18,7 @@ Aperta reads, edits and runs code in your project through a small set of tools, 
   <img src="docs/assets/screenshot.png" alt="Aperta running the tests, finding the bug and fixing it" width="760">
 </p>
 
-> **Status:** in development, not released yet.
+> **Status:** early release, v0.1.0. It works day to day, and things may still change between versions.
 
 ## What it does
 
