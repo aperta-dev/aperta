@@ -368,9 +368,10 @@ func TestContinueSendsEarlierConversation(t *testing.T) {
 func TestResumeRepairsInterruptedToolCall(t *testing.T) {
 	dir, home := t.TempDir(), t.TempDir()
 	real, _ := filepath.EvalSymlinks(dir)
+	cwd, _ := json.Marshal(real)
 	os.MkdirAll(filepath.Join(home, "sessions"), 0o700)
 	lines := []string{
-		`{"type":"session","id":"20260101-000000-aaaaaa","time":"2026-01-01T00:00:00Z","cwd":"` + real + `","model":"claude-sonnet-5-5"}`,
+		`{"type":"session","id":"20260101-000000-aaaaaa","time":"2026-01-01T00:00:00Z","cwd":` + string(cwd) + `,"model":"claude-sonnet-5-5"}`,
 		`{"type":"message","id":"m-1","time":"2026-01-01T00:00:01Z","message":{"role":"user","content":[{"type":"text","text":"run it"}]}}`,
 		`{"type":"message","id":"m-2","parent":"m-1","time":"2026-01-01T00:00:02Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t9","name":"shell","input":{"command":"sleep 100"}}]}}`,
 		`{"type":"message","id":"m-3","parent":"m-2","ti`,
