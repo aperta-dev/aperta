@@ -291,13 +291,23 @@ func TestAPIErrorFailsRun(t *testing.T) {
 }
 
 func TestVersionFlag(t *testing.T) {
+	want := "aperta dev"
+	info, err := exec.Command("go", "version", "-m", binary).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(info), "\n") {
+		if f := strings.Fields(line); len(f) >= 3 && f[0] == "mod" && f[2] != "(devel)" {
+			want = "aperta " + f[2]
+		}
+	}
 	for _, arg := range []string{"--version", "-v", "version"} {
 		out, err := exec.Command(binary, arg).Output()
 		if err != nil {
 			t.Fatalf("%s: %v", arg, err)
 		}
-		if got := strings.TrimSpace(string(out)); got != "aperta dev" {
-			t.Errorf("%s printed %q, want %q", arg, got, "aperta dev")
+		if got := strings.TrimSpace(string(out)); got != want {
+			t.Errorf("%s printed %q, want %q", arg, got, want)
 		}
 	}
 }
