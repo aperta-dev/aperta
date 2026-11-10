@@ -66,7 +66,7 @@ Each session is a JSONL file in `~/.aperta/sessions`. Resuming shows the last fe
 
 ## Keys
 
-Saved keys live in `~/.aperta/credentials.json`, readable only by you. They are shown masked (`sk-or-…9f2c`) and never written to sessions or logs. An environment variable such as `OPENAI_API_KEY` wins over a saved key.
+Saved keys live in `~/.aperta/credentials.json`, readable only by you on macOS and Linux (on Windows, your user folder's permissions apply). They are shown masked (`sk-or-…9f2c`) and never written to sessions or logs. An environment variable such as `OPENAI_API_KEY` wins over a saved key.
 
 ## MCP servers
 
