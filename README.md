@@ -1,8 +1,5 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.png">
-    <img src="docs/assets/banner-light.png" alt="Aperta, a calm coding agent for your terminal" width="760">
-  </picture>
+  <img src="docs/assets/banner.png" alt="aperta, a coding agent that asks" width="760">
 </p>
 
 <p align="center">
